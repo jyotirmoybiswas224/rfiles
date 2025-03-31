@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "react-toastify";
 import { BiPlus } from "react-icons/bi";
@@ -72,6 +72,7 @@ import { AzureMapsProvider } from "react-azure-maps";
 import useTUserContext from "../../../../../../../../context/TransporterUserContext";
 import GeneratorManifests from "./GeneratorManifests";
 import { HiOutlineChevronDown, HiOutlineChevronUp } from "react-icons/hi";
+import SearchableDropdownForParents from "../../../../../../../../components/UI/dropdowns/SearchableDropdownForParents";
 
 const defaultOption = {
 	serviceType: "",
@@ -157,8 +158,10 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const [itemsMap, setItemsMap] = useState({});
 	const [cancelReason, setCancelReason] = useState("");
 	const [subContractorData, setSubContractorData] = useState([]);
-    const [isOctoMarketUser,setIsOctoMarketUser] = useState(false)
+	const [isOctoMarketUser, setIsOctoMarketUser] = useState(false);
 	const [currentServiceSchedules, setCurrentServiceSchedules] = useState([]);
+	const [isAutoSaving, setIsAutoSaving] = useState(false);
+	const [hasChanges, setHasChanges] = useState(false);
 
 	const updateGeneratorData = async () => {
 		const data = await getGeneratorById(genId);
@@ -166,17 +169,69 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		setDisableButton(false);
 	};
 
+	const instructionsSectionRef = useRef(null);
+	const saveInstructions = async () => {
+		if (!generatorData || !hasChanges) return;
+
+		try {
+			const formData = watchInstructions();
+			const hasRealChanges = Object.keys(formData).some((key) => {
+				return formData[key] !== prevInstructions[key];
+			});
+
+			if (!hasRealChanges) {
+				setHasChanges(false);
+				return;
+			}
+
+			setIsAutoSaving(true);
+			await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), formData);
+			setPrevInstructions(formData);
+			setHasChanges(false);
+			showSuccessToastMessage("Service Instructions saved automatically");
+		} catch (error) {
+			console.log(error);
+			showInternalServerErrorToastMessage();
+		} finally {
+			setIsAutoSaving(false);
+		}
+	};
+
+	useEffect(() => {
+		const form = instructionsSectionRef.current;
+		if (!form) return;
+
+		const handleMouseLeave = () => {
+			if (hasChanges) {
+				saveInstructions();
+			}
+		};
+
+		form.addEventListener("mouseleave", handleMouseLeave);
+
+		return () => {
+			form.removeEventListener("mouseleave", handleMouseLeave);
+		};
+	}, [hasChanges, instructionsSectionRef.current]);
+
+	useEffect(() => {
+		const formData = watchInstructions();
+		const hasRealChanges = Object.keys(formData).some((key) => {
+			return formData[key] !== prevInstructions[key];
+		});
+
+		setHasChanges(hasRealChanges);
+	}, [watchInstructions(), prevInstructions]);
+
 	useEffect(() => {
 		if (genId) updateGeneratorData();
 	}, [genId]);
 
 	useEffect(() => {
-		// Extract the section from the URL
 		const urlParams = new URLSearchParams(window.location.search);
 		const section = urlParams.get("section");
 
 		if (section) {
-			// Scroll to the section with smooth behavior
 			const element = document.getElementById(section);
 			if (element) {
 				element.scrollIntoView({ behavior: "smooth" });
@@ -792,7 +847,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				}   border transition-colors duration-200 ease-in-out`}
 				onClick={() => {
 					setShowSSRForm(!showSSRFrom);
-					if(!isOctoMarketUser){
+					if (!isOctoMarketUser) {
 						document.getElementById(`transporter_not_octomarket_user`).showModal();
 					}
 
@@ -993,27 +1048,27 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		try {
 			const transporterDoc = await getDoc(doc(db, "transporters", transporterId));
 			const transporterMarketDoc = await getDoc(doc(db, "octoMarketUsers", transporterId));
-	
+
 			if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
 				console.log("No such transporter!");
 				return [];
 			}
-	
+
 			setIsOctoMarketUser(true);
-	
+
 			const data = transporterDoc.data();
 			const transporterMarketData = transporterMarketDoc.data();
-			console.log("subData",{ data, octoData: transporterMarketData });
-	
+			console.log("subData", { data, octoData: transporterMarketData });
+
 			if (!transporterMarketData) return [];
-	
+
 			const contractorRelationships = transporterMarketData.connections || {};
-	
+
 			const contractorPromises = Object.entries(contractorRelationships).map(async ([contractorId, relationship]) => {
 				const contractorDoc = await getDoc(doc(db, "transporters", contractorId));
-	
+
 				if (!contractorDoc.exists()) return null;
-	
+
 				const contractorData = contractorDoc.data();
 				return {
 					id: contractorId,
@@ -1028,7 +1083,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					status: relationship.status,
 				};
 			});
-	
+
 			const contractors = await Promise.all(contractorPromises);
 			return [
 				...contractors.filter(Boolean),
@@ -1049,22 +1104,21 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			return [];
 		}
 	};
-	
+
 	useEffect(() => {
 		const loadSubcontractors = async () => {
 			if (!user || !user.uid) return;
 			console.log("userrrr", user);
-	
+
 			try {
 				const subcontractors = await fetchContractorData(user.uid);
 				console.log("subcontractors", subcontractors);
 				setSubContractorData(subcontractors);
-				
 			} catch (error) {
 				console.error("Error loading subcontractors:", error);
 			}
 		};
-	
+
 		loadSubcontractors();
 	}, [user]);
 
@@ -1236,7 +1290,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 									navigate(`/market`);
 								}}
 							>
-								Go  to Octomarket
+								Go to Octomarket
 							</button>
 						</div>
 					</form>
@@ -1440,11 +1494,13 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 									render={({ field: { value, onChange } }) => (
 										<div className="w-full flex flex-col gap-4">
 											<div className="w-full flex">
-												<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">Expected Container(s) *</p>
+												<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">
+													Expected Container(s) *
+												</p>
 												<div className="w-2/3">
 													<MultiSelectRounded
-									                isDisabled={!formValues.serviceSchedules[index].serviceType}
-                                                       value={value.map((v) => v.item)}
+														isDisabled={!formValues.serviceSchedules[index].serviceType}
+														value={value.map((v) => v.item)}
 														onChange={(selectedItems) => {
 															const transformedItems = selectedItems.map((item) => {
 																const existingItem = value.find((v) => v.item === item);
@@ -1683,34 +1739,33 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								<div className="w-1/2 space-y-4">
 									{/* Route Dropdown */}
 									<Controller
-	name="selectedSubContractor"
-	control={control}
-	rules={{ required: "Sub Contractor is required" }}
-	render={({ field: { onChange, value } }) => (
-		<>
-			{console.log("sub drop", subContractorData)}
-			<Dropdown
-				label="Sub Contractors"
-				options={subContractorData
-					?.filter((subContractor) => subContractor.contractorName || subContractor.name)
-					.map((subContractor) => ({
-						label: subContractor.contractorName || subContractor.name || "--",
-						value: JSON.stringify({
-							id: subContractor.contractorDocid || subContractor.id,
-							Cname: subContractor.contractorName || subContractor.name || "--",
-						}),
-					}))}
-				value={value ? JSON.stringify(value) : ""}
-				onChange={(selectedValue) => onChange(JSON.parse(selectedValue))}
-				isRequired
-				listHeight="max-h-64"
-			/>
-			{errors.selectedSubContractor && (
-				<p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
-			)}
-		</>
-	)}
-/>
+										name="selectedSubContractor"
+										control={control}
+										rules={{ required: "Sub Contractor is required" }}
+										render={({ field: { onChange, value } }) => (
+											<div className="w-full relative">
+												<SearchableDropdownForParents
+													label={"Sub Contractors"}
+													options={subContractorData
+														?.filter((subContractor) => subContractor.contractorName || subContractor.name)
+														.map((subContractor) => ({
+															label: subContractor.contractorName || subContractor.name || "--",
+															value: JSON.stringify({
+																id: subContractor.contractorDocid || subContractor.id,
+																Cname: subContractor.contractorName || subContractor.name || "--",
+															}),
+														}))}
+													value={value ? JSON.stringify(value) : ""}
+													onChange={(selectedValue) => onChange(JSON.parse(selectedValue))}
+													isRequired
+													listHeight="max-h-64"
+												/>
+												{errors.selectedSubContractor && (
+													<p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
+												)}
+											</div>
+										)}
+									/>
 
 									{/* Service Frequency */}
 									<Controller
@@ -1802,7 +1857,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 										render={({ field: { value = [], onChange } }) => (
 											<div>
 												<MultiSelectRounded
-												   isDisabled={!formValues.serviceSchedules.serviceType}
+													isDisabled={!formValues.serviceSchedules.serviceType}
 													value={value ? value.map((v) => v.item) : []}
 													onChange={(selectedItems) => {
 														const transformedItems = selectedItems.map((item) => {
@@ -1892,7 +1947,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						{successMessage && <div className="text-red-500 text-sm p-2 text-right">{successMessage}</div>}
 
 						<div className="w-full flex justify-end p-2 gap-4">
-						<button
+							<button
 								type="button"
 								className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
 								onClick={async () => {
@@ -1943,7 +1998,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 												return;
 											}
 											document.getElementById(`delete-SSR`).close();
-											setShowSSRForm(!showSSRFrom)
+											setShowSSRForm(!showSSRFrom);
 										}}
 									>
 										Remove Schedule
@@ -1967,7 +2022,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
 				</div>
 			</form>
-			
+
 			<div className="py-5">
 				<div className="flex flex-col gap-2">
 					<div className="w-full grid gap-3">
@@ -2034,7 +2089,11 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					</div>
 				</div>
 			</div>
-			<form onSubmit={instructionHandleSubmit(instructionSubmitHandler)} className="grid gap-2">
+			<form
+				onSubmit={instructionHandleSubmit(instructionSubmitHandler)}
+				ref={instructionsSectionRef}
+				className="grid gap-2"
+			>
 				<div>
 					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC] mb-2">
 						Generator Service Instructions{" "}
@@ -2109,301 +2168,303 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			</form>
 
 			<h6 className="font-medium py-2 text-lg">
-  <span className="font-bold">Scheduled Services: </span>
-  <span>{generatorData?.generatorName ?? "--"}</span>{" "}
-</h6>
-<div className="w-full">
-  <div className="flex min-w-fit bg-[#E5F2FF] px-3 font-medium py-3 text-sm gap-2 rounded-t-xl sticky top-0 z-20">
-    <div className="w-[10%] min-w-[90px] shrink-0 flex items-center gap-2">
-      <div className={`tooltip tooltip-right flex items-center`} data-tip={"Mark all as high priority."}>
-        <input
-          type="checkbox"
-          className="w-3 h-3 bg-white"
-          defaultChecked={false}
-          onChange={async (e) => {
-            if (typeof e?.currentTarget?.checked === "undefined") return;
-            setUpcomingServices((prev) =>
-              prev.map((el) => {
-                if (el.status === SERVICE_STATUS.PENDING) {
-                  el.isPriority = e.currentTarget?.checked;
-                }
-                return el;
-              })
-            );
-            try {
-              let batch = writeBatch(db);
-              let operationCount = 0;
-              for (const el of upcomingServices) {
-                batch.update(doc(db, COLLECTIONS.scheduledServices, el.id), {
-                  isPriority: e?.currentTarget?.checked,
-                });
-                operationCount++;
-                if (operationCount >= 450) {
-                  await batch.commit();
-                  batch = writeBatch(db);
-                  operationCount = 0;
-                }
-              }
-              if (operationCount > 0) {
-                await batch.commit();
-              }
-            } catch (error) {
-              console.log(error);
-              showInternalServerErrorToastMessage();
-            }
-          }}
-        />
-      </div>
-      <p className="truncate">Priority</p>
-    </div>
-    <div className="w-[8%] min-w-[80px] shrink-0">Date</div>
-    <div className="w-[10%] min-w-[90px] shrink-0">Operating Hours</div>
-    <div className="w-[10%] min-w-[90px] shrink-0">Route Info</div>
-    <div className="w-[18%] min-w-[150px] shrink-0 px-2">Temporary Service Instructions</div>
-    <div className="w-[2%] min-w-[10px] shrink-0"></div>
-    <div className="w-[15%] min-w-[120px] shrink-0">Service Type</div>
-    <div className="w-[2%] min-w-[10px] shrink-0"></div>
-    <div className="w-[15%] min-w-[120px] shrink-0">Action</div>
-  </div>
-  <div className="max-h-[75vh] overflow-x-auto overflow-y-scroll">
-    {isLoadingServices ? (
-      <Loader height="h-12 pt-4" />
-    ) : upcomingServices?.length > 0 ? (
-      upcomingServices.map((service, index) => (
-        <div
-          key={service?.id}
-          className={`flex items-center gap-2 border-b border-[#CCCCCC] px-4 text-sm font-base text-cardTextGray py-3 ${
-            service.status === SERVICE_STATUS.CANCELLED ? "bg-gray-200" : ""
-          }`}
-        >
-          <div className="flex items-center gap-2 w-[10%] min-w-[90px] shrink-0">
-            <div
-              className={`${
-                service.status === SERVICE_STATUS.CANCELLED ? "" : "tooltip tooltip-right"
-              } flex items-center`}
-              data-tip={service.isPriority ? "Cancel priority" : "Mark as priority"}
-            >
-              <input
-                type="checkbox"
-                className="w-3 h-3 bg-white"
-                disabled={service.status === SERVICE_STATUS.CANCELLED}
-                checked={service?.isPriority ?? false}
-                onChange={async (e) => {
-                  if (service.status === SERVICE_STATUS.PENDING) {
-                    setUpcomingServices((prev) =>
-                      prev.map((el) => {
-                        if (el.id === service.id) {
-                          el.isPriority = e.currentTarget?.checked;
-                        }
-                        return el;
-                      })
-                    );
-                  }
-                  try {
-                    await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-                      isPriority: e.currentTarget?.checked,
-                    });
-                  } catch (error) {
-                    console.log(error);
-                    showInternalServerErrorToastMessage();
-                  }
-                }}
-              />
-            </div>
-            <span className={service?.isPriority ? "text-red-500 text-xs ml-1 truncate" : "text-xs ml-1 truncate"}>
-              {service?.isPriority ? "High Priority" : "Normal Priority"}
-            </span>
-          </div>
-          <div className="w-[8%] min-w-[80px] shrink-0 truncate text-xs">
-            {service?.date ? formatUtcDateString(service.date.toDate().toUTCString()) : "--"}
-          </div>
-          <div className="w-[10%] min-w-[90px] shrink-0 truncate">
-            {renderUpcomingOperatingHours(formatUtcDateString(service.date.toDate().toUTCString()))}
-          </div>
-          <div className="w-[10%] min-w-[90px] shrink-0 truncate">
-            (<NoOfStops serviceDate={service?.date?.toDate()} routeId={service.routeId} />){" "}
-            {service.routeData?.routeLabel.length > 0 ? service.routeData?.routeLabel + " " : "N/A"}
-          </div>
-          <div className="w-[18%] min-w-[150px] shrink-0">
-            <input
-              type="text"
-              defaultValue={service?.temporaryServiceInstruction ?? ""}
-              disabled={service.status === SERVICE_STATUS.CANCELLED}
-              className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-1 text-sm h-8 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
-              onBlur={async (e) => {
-                console.log(service?.temporaryServiceInstruction);
-                const temporaryServiceInstruction = e?.currentTarget?.value?.trim() ?? "";
-                try {
-                  await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-                    temporaryServiceInstruction,
-                  });
-                } catch (error) {
-                  console.log(error);
-                  showInternalServerErrorToastMessage();
-                }
-              }}
-            />
-          </div>
-          <div className="w-[2%] min-w-[10px] shrink-0"></div>
-          <div className="w-[15%] min-w-[120px] shrink-0 truncate">
-            {typeof service.serviceScheduleData?.serviceType === "string" &&
-            service.serviceScheduleData?.serviceType?.length > 0
-              ? serviceTypes[
-                  serviceTypes.findIndex((el) => el.value === service.serviceScheduleData?.serviceType)
-                ]?.label
-              : ""}
-            {typeof service.serviceScheduleData?.serviceType !== "string" &&
-            service.serviceScheduleData?.serviceType?.length > 0
-              ? service.serviceScheduleData?.serviceType.map((type, i) => {
-                  return (
-                    <p key={i} className="truncate">
-                      {serviceTypes[serviceTypes.findIndex((el) => el.value === type)]?.label ?? ""}{" "}
-                    </p>
-                  );
-                })
-              : ""}
-          </div>
-          <div className="w-[2%] min-w-[10px] shrink-0"></div>
-          <div className="w-[15%] min-w-[120px] shrink-0">
-            <button
-              type="button"
-              className="btn btn-primary btn-sm text-base ml-auto w-full"
-              disabled={service.status === SERVICE_STATUS.INPROGRESS}
-              onClick={() => {
-                document.getElementById(`cancel_service_modal_${service.id}`).showModal();
-              }}
-            >
-              {service.status === SERVICE_STATUS.PENDING || service.status === SERVICE_STATUS.INPROGRESS
-                ? "Cancel Service"
-                : ""}
-              {service.status === SERVICE_STATUS.CANCELLED ? "Reinstate Service" : ""}
-            </button>
-            <dialog id={`cancel_service_modal_${service.id}`} className="modal">
-              <div className="modal-box">
-                <div>
-                  <button
-                    className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-                    type="button"
-                    onClick={() => {
-                      document.getElementById(`cancel_service_modal_${service.id}`).close();
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <h3 className="font-bold text-lg">Are you sure?</h3>
-                <div className="flex py-5 gap-5 flex-col">
-                  <p className="">
-                    Proceeding with this operation will mark this service as{" "}
-                    {service.status === SERVICE_STATUS.CANCELLED ? "Pending" : "Cancelled"}.
-                  </p>
-                </div>
-                <div className={`py-5 ${service.status === SERVICE_STATUS.CANCELLED ? "hidden" : "block"}`}>
-                  <label htmlFor="cancellationNote">
-                    <p>Enter Note for Cancellation *</p>
-                    <textarea
-                      rows={3}
-                      name="cancellationNote"
-                      id={`cancellationNote_${service.id}`}
-                      defaultValue={service?.temporaryServiceInstruction ?? ""}
-                      disabled={service.status === SERVICE_STATUS.CANCELLED}
-                      className={`w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText`}
-                    />
-                  </label>
-                </div>
-                <div className="flex w-full justify-between">
-                  {service.status === SERVICE_STATUS.CANCELLED && (
-                    <button
-                      type="button"
-                      className={`btn ${"btn-error"} btn-sm`}
-                      onClick={() => {
-                        document.getElementById(`cancel_service_modal_${service.id}`).close();
-                      }}
-                    >
-                      {"Keep It Cancelled"}
-                    </button>
-                  )}
+				<span className="font-bold">Scheduled Services: </span>
+				<span>{generatorData?.generatorName ?? "--"}</span>{" "}
+			</h6>
+			<div className="w-full">
+				<div className="flex min-w-fit bg-[#E5F2FF] px-3 font-medium py-3 text-sm gap-2 rounded-t-xl sticky top-0 z-20">
+					<div className="w-[10%] min-w-[90px] shrink-0 flex items-center gap-2">
+						<div className={`tooltip tooltip-right flex items-center`} data-tip={"Mark all as high priority."}>
+							<input
+								type="checkbox"
+								className="w-3 h-3 bg-white"
+								defaultChecked={false}
+								onChange={async (e) => {
+									if (typeof e?.currentTarget?.checked === "undefined") return;
+									setUpcomingServices((prev) =>
+										prev.map((el) => {
+											if (el.status === SERVICE_STATUS.PENDING) {
+												el.isPriority = e.currentTarget?.checked;
+											}
+											return el;
+										})
+									);
+									try {
+										let batch = writeBatch(db);
+										let operationCount = 0;
+										for (const el of upcomingServices) {
+											batch.update(doc(db, COLLECTIONS.scheduledServices, el.id), {
+												isPriority: e?.currentTarget?.checked,
+											});
+											operationCount++;
+											if (operationCount >= 450) {
+												await batch.commit();
+												batch = writeBatch(db);
+												operationCount = 0;
+											}
+										}
+										if (operationCount > 0) {
+											await batch.commit();
+										}
+									} catch (error) {
+										console.log(error);
+										showInternalServerErrorToastMessage();
+									}
+								}}
+							/>
+						</div>
+						<p className="truncate">Priority</p>
+					</div>
+					<div className="w-[8%] min-w-[80px] shrink-0">Date</div>
+					<div className="w-[10%] min-w-[90px] shrink-0">Operating Hours</div>
+					<div className="w-[10%] min-w-[90px] shrink-0">Route Info</div>
+					<div className="w-[18%] min-w-[150px] shrink-0 px-2">Temporary Service Instructions</div>
+					<div className="w-[2%] min-w-[10px] shrink-0"></div>
+					<div className="w-[15%] min-w-[120px] shrink-0">Service Type</div>
+					<div className="w-[2%] min-w-[10px] shrink-0"></div>
+					<div className="w-[15%] min-w-[120px] shrink-0">Action</div>
+				</div>
+				<div className="max-h-[75vh] overflow-x-auto overflow-y-scroll">
+					{isLoadingServices ? (
+						<Loader height="h-12 pt-4" />
+					) : upcomingServices?.length > 0 ? (
+						upcomingServices.map((service, index) => (
+							<div
+								key={service?.id}
+								className={`flex items-center gap-2 border-b border-[#CCCCCC] px-4 text-sm font-base text-cardTextGray py-3 ${
+									service.status === SERVICE_STATUS.CANCELLED ? "bg-gray-200" : ""
+								}`}
+							>
+								<div className="flex items-center gap-2 w-[10%] min-w-[90px] shrink-0">
+									<div
+										className={`${
+											service.status === SERVICE_STATUS.CANCELLED ? "" : "tooltip tooltip-right"
+										} flex items-center`}
+										data-tip={service.isPriority ? "Cancel priority" : "Mark as priority"}
+									>
+										<input
+											type="checkbox"
+											className="w-3 h-3 bg-white"
+											disabled={service.status === SERVICE_STATUS.CANCELLED}
+											checked={service?.isPriority ?? false}
+											onChange={async (e) => {
+												if (service.status === SERVICE_STATUS.PENDING) {
+													setUpcomingServices((prev) =>
+														prev.map((el) => {
+															if (el.id === service.id) {
+																el.isPriority = e.currentTarget?.checked;
+															}
+															return el;
+														})
+													);
+												}
+												try {
+													await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
+														isPriority: e.currentTarget?.checked,
+													});
+												} catch (error) {
+													console.log(error);
+													showInternalServerErrorToastMessage();
+												}
+											}}
+										/>
+									</div>
+									<span
+										className={service?.isPriority ? "text-red-500 text-xs ml-1 truncate" : "text-xs ml-1 truncate"}
+									>
+										{service?.isPriority ? "High Priority" : "Normal Priority"}
+									</span>
+								</div>
+								<div className="w-[8%] min-w-[80px] shrink-0 truncate text-xs">
+									{service?.date ? formatUtcDateString(service.date.toDate().toUTCString()) : "--"}
+								</div>
+								<div className="w-[10%] min-w-[90px] shrink-0 truncate">
+									{renderUpcomingOperatingHours(formatUtcDateString(service.date.toDate().toUTCString()))}
+								</div>
+								<div className="w-[10%] min-w-[90px] shrink-0 truncate">
+									(<NoOfStops serviceDate={service?.date?.toDate()} routeId={service.routeId} />){" "}
+									{service.routeData?.routeLabel.length > 0 ? service.routeData?.routeLabel + " " : "N/A"}
+								</div>
+								<div className="w-[18%] min-w-[150px] shrink-0">
+									<input
+										type="text"
+										defaultValue={service?.temporaryServiceInstruction ?? ""}
+										disabled={service.status === SERVICE_STATUS.CANCELLED}
+										className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-1 text-sm h-8 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
+										onBlur={async (e) => {
+											console.log(service?.temporaryServiceInstruction);
+											const temporaryServiceInstruction = e?.currentTarget?.value?.trim() ?? "";
+											try {
+												await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
+													temporaryServiceInstruction,
+												});
+											} catch (error) {
+												console.log(error);
+												showInternalServerErrorToastMessage();
+											}
+										}}
+									/>
+								</div>
+								<div className="w-[2%] min-w-[10px] shrink-0"></div>
+								<div className="w-[15%] min-w-[120px] shrink-0 truncate">
+									{typeof service.serviceScheduleData?.serviceType === "string" &&
+									service.serviceScheduleData?.serviceType?.length > 0
+										? serviceTypes[
+												serviceTypes.findIndex((el) => el.value === service.serviceScheduleData?.serviceType)
+										  ]?.label
+										: ""}
+									{typeof service.serviceScheduleData?.serviceType !== "string" &&
+									service.serviceScheduleData?.serviceType?.length > 0
+										? service.serviceScheduleData?.serviceType.map((type, i) => {
+												return (
+													<p key={i} className="truncate">
+														{serviceTypes[serviceTypes.findIndex((el) => el.value === type)]?.label ?? ""}{" "}
+													</p>
+												);
+										  })
+										: ""}
+								</div>
+								<div className="w-[2%] min-w-[10px] shrink-0"></div>
+								<div className="w-[15%] min-w-[120px] shrink-0">
+									<button
+										type="button"
+										className="btn btn-primary btn-sm text-base ml-auto w-full"
+										disabled={service.status === SERVICE_STATUS.INPROGRESS}
+										onClick={() => {
+											document.getElementById(`cancel_service_modal_${service.id}`).showModal();
+										}}
+									>
+										{service.status === SERVICE_STATUS.PENDING || service.status === SERVICE_STATUS.INPROGRESS
+											? "Cancel Service"
+											: ""}
+										{service.status === SERVICE_STATUS.CANCELLED ? "Reinstate Service" : ""}
+									</button>
+									<dialog id={`cancel_service_modal_${service.id}`} className="modal">
+										<div className="modal-box">
+											<div>
+												<button
+													className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+													type="button"
+													onClick={() => {
+														document.getElementById(`cancel_service_modal_${service.id}`).close();
+													}}
+												>
+													✕
+												</button>
+											</div>
+											<h3 className="font-bold text-lg">Are you sure?</h3>
+											<div className="flex py-5 gap-5 flex-col">
+												<p className="">
+													Proceeding with this operation will mark this service as{" "}
+													{service.status === SERVICE_STATUS.CANCELLED ? "Pending" : "Cancelled"}.
+												</p>
+											</div>
+											<div className={`py-5 ${service.status === SERVICE_STATUS.CANCELLED ? "hidden" : "block"}`}>
+												<label htmlFor="cancellationNote">
+													<p>Enter Note for Cancellation *</p>
+													<textarea
+														rows={3}
+														name="cancellationNote"
+														id={`cancellationNote_${service.id}`}
+														defaultValue={service?.temporaryServiceInstruction ?? ""}
+														disabled={service.status === SERVICE_STATUS.CANCELLED}
+														className={`w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText`}
+													/>
+												</label>
+											</div>
+											<div className="flex w-full justify-between">
+												{service.status === SERVICE_STATUS.CANCELLED && (
+													<button
+														type="button"
+														className={`btn ${"btn-error"} btn-sm`}
+														onClick={() => {
+															document.getElementById(`cancel_service_modal_${service.id}`).close();
+														}}
+													>
+														{"Keep It Cancelled"}
+													</button>
+												)}
 
-                  <button
-                    className={`btn ${
-                      service.status === SERVICE_STATUS.CANCELLED ? "btn-primary" : "btn-error"
-                    } btn-sm`}
-                    type="button"
-                    onClick={async () => {
-                      console.log(service.id);
-                      const el = document.getElementById(`cancellationNote_${service.id}`);
-                      if (!el) return;
-                      const temporaryServiceInstruction = el.value.trim();
-                      if (temporaryServiceInstruction.length === 0) {
-                        showErrorToastMessage("Cancellation note is required.");
-                        return;
-                      }
-                      if (service.status === SERVICE_STATUS.PENDING) {
-                        setUpcomingServices((prev) =>
-                          prev.map((el) => {
-                            if (el.id === service.id) {
-                              el.status = SERVICE_STATUS.CANCELLED;
-                            }
-                            return el;
-                          })
-                        );
-                        try {
-                          await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-                            status: SERVICE_STATUS.CANCELLED,
-                            temporaryServiceInstruction,
-                          });
-                        } catch (error) {
-                          console.log(error);
-                          showInternalServerErrorToastMessage();
-                        }
-                      } else if (service.status === SERVICE_STATUS.CANCELLED) {
-                        setUpcomingServices((prev) =>
-                          prev.map((el) => {
-                            if (el.id === service.id) {
-                              el.status = SERVICE_STATUS.PENDING;
-                            }
-                            return el;
-                          })
-                        );
-                        try {
-                          await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-                            status: SERVICE_STATUS.PENDING,
-                            temporaryServiceInstruction: "",
-                          });
-                        } catch (error) {
-                          console.log(error);
-                          showInternalServerErrorToastMessage();
-                        }
-                      }
-                      document.getElementById(`cancel_service_modal_${service.id}`).close();
-                    }}
-                  >
-                    {service.status === SERVICE_STATUS.CANCELLED
-                      ? "Reinstate This Service"
-                      : "Cancel This Service"}
-                  </button>
-                  {service.status === SERVICE_STATUS.PENDING && (
-                    <button
-                      type="button"
-                      className={`btn ${"btn-primary"} btn-sm`}
-                      onClick={() => {
-                        document.getElementById(`cancel_service_modal_${service.id}`).close();
-                      }}
-                    >
-                      {"Keep This Service"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </dialog>
-          </div>
-        </div>
-      ))
-    ) : (
-      <div className="w-full text-center py-4 text-cardTextGray">No upcoming services found.</div>
-    )}
-  </div>
-</div>
+												<button
+													className={`btn ${
+														service.status === SERVICE_STATUS.CANCELLED ? "btn-primary" : "btn-error"
+													} btn-sm`}
+													type="button"
+													onClick={async () => {
+														console.log(service.id);
+														const el = document.getElementById(`cancellationNote_${service.id}`);
+														if (!el) return;
+														const temporaryServiceInstruction = el.value.trim();
+														if (temporaryServiceInstruction.length === 0) {
+															showErrorToastMessage("Cancellation note is required.");
+															return;
+														}
+														if (service.status === SERVICE_STATUS.PENDING) {
+															setUpcomingServices((prev) =>
+																prev.map((el) => {
+																	if (el.id === service.id) {
+																		el.status = SERVICE_STATUS.CANCELLED;
+																	}
+																	return el;
+																})
+															);
+															try {
+																await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
+																	status: SERVICE_STATUS.CANCELLED,
+																	temporaryServiceInstruction,
+																});
+															} catch (error) {
+																console.log(error);
+																showInternalServerErrorToastMessage();
+															}
+														} else if (service.status === SERVICE_STATUS.CANCELLED) {
+															setUpcomingServices((prev) =>
+																prev.map((el) => {
+																	if (el.id === service.id) {
+																		el.status = SERVICE_STATUS.PENDING;
+																	}
+																	return el;
+																})
+															);
+															try {
+																await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
+																	status: SERVICE_STATUS.PENDING,
+																	temporaryServiceInstruction: "",
+																});
+															} catch (error) {
+																console.log(error);
+																showInternalServerErrorToastMessage();
+															}
+														}
+														document.getElementById(`cancel_service_modal_${service.id}`).close();
+													}}
+												>
+													{service.status === SERVICE_STATUS.CANCELLED
+														? "Reinstate This Service"
+														: "Cancel This Service"}
+												</button>
+												{service.status === SERVICE_STATUS.PENDING && (
+													<button
+														type="button"
+														className={`btn ${"btn-primary"} btn-sm`}
+														onClick={() => {
+															document.getElementById(`cancel_service_modal_${service.id}`).close();
+														}}
+													>
+														{"Keep This Service"}
+													</button>
+												)}
+											</div>
+										</div>
+									</dialog>
+								</div>
+							</div>
+						))
+					) : (
+						<div className="w-full text-center py-4 text-cardTextGray">No upcoming services found.</div>
+					)}
+				</div>
+			</div>
 			<div className="ml-auto">
 				<button
 					type="button"
