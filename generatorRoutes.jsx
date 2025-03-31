@@ -72,6 +72,7 @@ import { AzureMapsProvider } from "react-azure-maps";
 import useTUserContext from "../../../../../../../../context/TransporterUserContext";
 import GeneratorManifests from "./GeneratorManifests";
 import { HiOutlineChevronDown, HiOutlineChevronUp } from "react-icons/hi";
+import SearchableDropdownForParents from "../../../../../../../../components/UI/dropdowns/SearchableDropdownForParents";
 
 const defaultOption = {
 	serviceType: "",
@@ -123,20 +124,20 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	const useAutosave = (callback, delay = 3000, dependencies = []) => {
 		const debouncedFunction = useCallback(callback, dependencies);
-	  
+
 		useEffect(() => {
-		  const timer = setTimeout(() => {
-			debouncedFunction();
-		  }, delay);
-	  
-		  return () => {
-			clearTimeout(timer);
-		  };
+			const timer = setTimeout(() => {
+				debouncedFunction();
+			}, delay);
+
+			return () => {
+				clearTimeout(timer);
+			};
 		}, [debouncedFunction, delay]);
-	  };
-const [isInstructionsChanged, setIsInstructionsChanged] = useState(false);
-const [isAutoSaving, setIsAutoSaving] = useState(false);
-const [autoSaveStatus, setAutoSaveStatus] = useState(null); // 'saving', 'success', 'error'
+	};
+	const [isInstructionsChanged, setIsInstructionsChanged] = useState(false);
+	const [isAutoSaving, setIsAutoSaving] = useState(false);
+	const [autoSaveStatus, setAutoSaveStatus] = useState(null); // 'saving', 'success', 'error'
 
 	const { fields, append, remove } = useFieldArray({
 		control,
@@ -532,106 +533,106 @@ const [autoSaveStatus, setAutoSaveStatus] = useState(null); // 'saving', 'succes
 			});
 		}
 	}, [watchServiceSchedules, setValue]);
-	
-useEffect(() => {
-	const subscription = watch((value, { name }) => {
-	  if (name && name.startsWith("serviceSchedules") && !disableButton) {
-		if (!name.endsWith("upcomingDates")) {
-		  const index = parseInt(name.split(".")[1]);
-		  
-		  if (showSSRFrom) return;
-		  
-		  setLastEditedIndex(index);
-		}
-	  }
-	});
-  
-	return () => subscription.unsubscribe();
-  }, [watch, disableButton, showSSRFrom]);
-  
-  const [lastEditedIndex, setLastEditedIndex] = useState(null);
-  
-  useAutosave(
-	async () => {
-	  if (lastEditedIndex !== null && !showSSRFrom && !disableButton) {
-		const serviceSchedule = formValues.serviceSchedules[lastEditedIndex];
-		
-		if (
-		  serviceSchedule && 
-		  isUpdating(prevServiceSchedules[lastEditedIndex], serviceSchedule) &&
-		  serviceSchedule.routeId && 
-		  serviceSchedule.serviceType && 
-		  serviceSchedule.anchorDate
-		) {
-		  setDisableButton(true);
-		  await handleSave(lastEditedIndex);
-		  setLastEditedIndex(null);
-		}
-	  }
-	},
-	3000, // 3 seconds of inactivity
-	[lastEditedIndex, formValues, prevServiceSchedules, showSSRFrom, disableButton]
-  );
 
-  useAutosave(
-	async () => {
-	  if (lastEditedIndex !== null && !showSSRFrom && !disableButton) {
-		const serviceSchedule = formValues.serviceSchedules[lastEditedIndex];
-		
-		if (
-		  serviceSchedule && 
-		  isUpdating(prevServiceSchedules[lastEditedIndex], serviceSchedule) &&
-		  serviceSchedule.routeId && 
-		  serviceSchedule.serviceType && 
-		  serviceSchedule.anchorDate
-		) {
-		  try {
-			setAutoSaveStatus('saving');
-			setIsAutoSaving(true);
-			
-			await handleSave(lastEditedIndex);
-			
-			setAutoSaveStatus('success');
-			setTimeout(() => setAutoSaveStatus(null), 2000);
-		  } catch (error) {
-			console.error("Autosave failed:", error);
-			setAutoSaveStatus('error');
-		  } finally {
-			setIsAutoSaving(false);
-			setLastEditedIndex(null);
-		  }
-		}
-	  }
-	},
-	3000, // 3 seconds of inactivity
-	[lastEditedIndex, formValues, prevServiceSchedules, showSSRFrom, disableButton]
-  );
+	useEffect(() => {
+		const subscription = watch((value, { name }) => {
+			if (name && name.startsWith("serviceSchedules") && !disableButton) {
+				if (!name.endsWith("upcomingDates")) {
+					const index = parseInt(name.split(".")[1]);
 
-useAutosave(
-	async () => {
-	  if (isInstructionsChanged && isUpdatingInstruction() && !showSSRFrom) {
-		const data = watchInstructions();
-		try {
-		  setAutoSaveStatus('saving');
-		  setIsAutoSaving(true);
-		  
-		  await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
-		  setPrevInstructions(data);
-		  
-		  setAutoSaveStatus('success');
-		  setTimeout(() => setAutoSaveStatus(null), 2000);
-		} catch (error) {
-		  console.error("Instructions autosave failed:", error);
-		  setAutoSaveStatus('error');
-		} finally {
-		  setIsAutoSaving(false);
-		  setIsInstructionsChanged(false);
-		}
-	  }
-	},
-	3000, // 3 seconds of inactivity
-	[isInstructionsChanged, watchInstructions(), showSSRFrom]
-  );
+					if (showSSRFrom) return;
+
+					setLastEditedIndex(index);
+				}
+			}
+		});
+
+		return () => subscription.unsubscribe();
+	}, [watch, disableButton, showSSRFrom]);
+
+	const [lastEditedIndex, setLastEditedIndex] = useState(null);
+
+	useAutosave(
+		async () => {
+			if (lastEditedIndex !== null && !showSSRFrom && !disableButton) {
+				const serviceSchedule = formValues.serviceSchedules[lastEditedIndex];
+
+				if (
+					serviceSchedule &&
+					isUpdating(prevServiceSchedules[lastEditedIndex], serviceSchedule) &&
+					serviceSchedule.routeId &&
+					serviceSchedule.serviceType &&
+					serviceSchedule.anchorDate
+				) {
+					setDisableButton(true);
+					await handleSave(lastEditedIndex);
+					setLastEditedIndex(null);
+				}
+			}
+		},
+		3000, // 3 seconds of inactivity
+		[lastEditedIndex, formValues, prevServiceSchedules, showSSRFrom, disableButton]
+	);
+
+	useAutosave(
+		async () => {
+			if (lastEditedIndex !== null && !showSSRFrom && !disableButton) {
+				const serviceSchedule = formValues.serviceSchedules[lastEditedIndex];
+
+				if (
+					serviceSchedule &&
+					isUpdating(prevServiceSchedules[lastEditedIndex], serviceSchedule) &&
+					serviceSchedule.routeId &&
+					serviceSchedule.serviceType &&
+					serviceSchedule.anchorDate
+				) {
+					try {
+						setAutoSaveStatus("saving");
+						setIsAutoSaving(true);
+
+						await handleSave(lastEditedIndex);
+
+						setAutoSaveStatus("success");
+						setTimeout(() => setAutoSaveStatus(null), 2000);
+					} catch (error) {
+						console.error("Autosave failed:", error);
+						setAutoSaveStatus("error");
+					} finally {
+						setIsAutoSaving(false);
+						setLastEditedIndex(null);
+					}
+				}
+			}
+		},
+		2000, // 3 seconds of inactivity
+		[lastEditedIndex, formValues, prevServiceSchedules, showSSRFrom, disableButton]
+	);
+
+	useAutosave(
+		async () => {
+			if (isInstructionsChanged && isUpdatingInstruction() && !showSSRFrom) {
+				const data = watchInstructions();
+				try {
+					setAutoSaveStatus("saving");
+					setIsAutoSaving(true);
+
+					await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
+					setPrevInstructions(data);
+
+					setAutoSaveStatus("success");
+					setTimeout(() => setAutoSaveStatus(null), 2000);
+				} catch (error) {
+					console.error("Instructions autosave failed:", error);
+					setAutoSaveStatus("error");
+				} finally {
+					setIsAutoSaving(false);
+					setIsInstructionsChanged(false);
+				}
+			}
+		},
+		2000, // 3 seconds of inactivity
+		[isInstructionsChanged, watchInstructions(), showSSRFrom]
+	);
 
 	const groupContainersBySubWasteType = (containers) => {
 		const groupedContainers = {};
@@ -715,72 +716,71 @@ useAutosave(
 
 	const handleSave = async (index) => {
 		try {
-		  setIsSubmitting(true);
-		  const data = {
-			...formValues.serviceSchedules[index],
-			generatorId: generatorData.id,
-			transporterId: user?.uid,
-			createdAt: serverTimestamp(),
-		  };
-		  console.log("Data to save:", data);
-		  delete data?.isUpdating;
-		  delete data?.isSetUpService;
-		  delete data?.upcomingDates;
-		  
-		  if (!isAutoSaving) {
-			showLoadingToastMessage("Saving...");
-		  }
-		  
-		  let scheduleRef = null;
-		  if (data?.id) {
-			scheduleRef = doc(db, COLLECTIONS.serviceSchedules, data.id);
-		  } else {
-			scheduleRef = doc(collection(db, COLLECTIONS.serviceSchedules));
-		  }
-	  
-		  const batch = writeBatch(db);
-		  batch.set(scheduleRef, data);
-		  if (!data?.id) {
-			batch.update(doc(db, COLLECTIONS.generators, generatorData.id), {
-			  serviceSchedules: arrayUnion(scheduleRef.id),
-			  updatedAt: serverTimestamp(),
-			});
-		  }
-		  await batch.commit();
-		  
-		  if (!isAutoSaving) {
-			showSuccessToastMessage("Service created successfully!. Changes will reflect shortly.");
-		  }
-		  
-		  updateGeneratorData();
-		  fetchServiceSchedules();
-		} catch (error) {
-		  if (error.cause === "customError") {
+			setIsSubmitting(true);
+			const data = {
+				...formValues.serviceSchedules[index],
+				generatorId: generatorData.id,
+				transporterId: user?.uid,
+				createdAt: serverTimestamp(),
+			};
+			console.log("Data to save:", data);
+			delete data?.isUpdating;
+			delete data?.isSetUpService;
+			delete data?.upcomingDates;
+
 			if (!isAutoSaving) {
-			  showErrorToastMessage(error.message);
+				showLoadingToastMessage("Saving...");
 			}
-		  } else {
-			if (!isAutoSaving) {
-			  toast.dismiss();
-			  console.error("Error saving schedules:", error);
-			  toast.error("Error saving schedules. Please try again.");
+
+			let scheduleRef = null;
+			if (data?.id) {
+				scheduleRef = doc(db, COLLECTIONS.serviceSchedules, data.id);
 			} else {
-			  console.error("Autosave error:", error);
+				scheduleRef = doc(collection(db, COLLECTIONS.serviceSchedules));
 			}
-		  }
-		  throw error; 
+
+			const batch = writeBatch(db);
+			batch.set(scheduleRef, data);
+			if (!data?.id) {
+				batch.update(doc(db, COLLECTIONS.generators, generatorData.id), {
+					serviceSchedules: arrayUnion(scheduleRef.id),
+					updatedAt: serverTimestamp(),
+				});
+			}
+			await batch.commit();
+
+			if (!isAutoSaving) {
+				showSuccessToastMessage("Service updated successfully!. Changes will reflect shortly.");
+			}
+
+			updateGeneratorData();
+			fetchServiceSchedules();
+		} catch (error) {
+			if (error.cause === "customError") {
+				if (!isAutoSaving) {
+					showErrorToastMessage(error.message);
+				}
+			} else {
+				if (!isAutoSaving) {
+					toast.dismiss();
+					console.error("Error saving schedules:", error);
+					toast.error("Error saving schedules. Please try again.");
+				} else {
+					console.error("Autosave error:", error);
+				}
+			}
+			throw error;
 		} finally {
-		  setIsSubmitting(false);
+			setIsSubmitting(false);
 		}
-	  };
+	};
 
-
-const trackServiceScheduleChanges = (index) => {
-	if (!showSSRFrom && !disableButton) {
-	  setLastEditedIndex(index);
-	  setAutoSaveStatus(null);
-	}
-  };
+	const trackServiceScheduleChanges = (index) => {
+		if (!showSSRFrom && !disableButton) {
+			setLastEditedIndex(index);
+			setAutoSaveStatus(null);
+		}
+	};
 
 	const deleteSchedule = async (field, index) => {
 		console.log({ field });
@@ -832,19 +832,19 @@ const trackServiceScheduleChanges = (index) => {
 
 	const instructionSubmitHandler = async (data) => {
 		if (!generatorData) return;
-	  
+
 		try {
-		  setIsAutoSaving(false); 
-		  showLoadingToastMessage("Saving Service Instructions.");
-		  await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
-		  setPrevInstructions(data);
-		  setIsInstructionsChanged(false); 
-		  showSuccessToastMessage("Service Instructions saved successfully.");
+			setIsAutoSaving(false);
+			showLoadingToastMessage("Saving Service Instructions.");
+			await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
+			setPrevInstructions(data);
+			setIsInstructionsChanged(false);
+			showSuccessToastMessage("Service Instructions saved successfully.");
 		} catch (error) {
-		  console.log(error);
-		  showInternalServerErrorToastMessage();
+			console.log(error);
+			showInternalServerErrorToastMessage();
 		}
-	  };
+	};
 	const handleCopyToClipboard = async () => {
 		try {
 			let dates = upcomingServices.map((scheduledService) => formattedDate(scheduledService.date));
@@ -1345,7 +1345,7 @@ const trackServiceScheduleChanges = (index) => {
 					</form>
 				</div>
 			</dialog>
-			<GeneratorInfoHeader generatorData={generatorData ?? {}} />
+			<GeneratorInfoHeader generatorData={generatorData??{}}/>
 			<div className="rounded-xl overflow-clip">
 				<AzureMapsProvider>
 					<RouteAssignment
@@ -1368,47 +1368,47 @@ const trackServiceScheduleChanges = (index) => {
 					<div key={field.id || Date.now() + Math.random()} className="border-b border-gray-100">
 						<div className="flex gap-8 w-full ">
 							<div className="w-1/2">
-							<Controller
-  name={`serviceSchedules.${index}.routeId`}
-  control={control}
-  rules={{ required: "Route is required" }}
-  render={({ field: { onChange, value } }) => (
-    <Dropdown
-      label="Route"
-      options={routeOptions}
-      value={value}
-      onChange={(e) => {
-        onChange(e);
-        trigger(`serviceSchedules.${index}.routeId`, { shouldFocus: true });
-        trackServiceScheduleChanges(index); 
-      }}
-      isRequired={true}
-    />
-  )}
-/>
+								<Controller
+									name={`serviceSchedules.${index}.routeId`}
+									control={control}
+									rules={{ required: "Route is required" }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Route"
+											options={routeOptions}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.routeId`, { shouldFocus: true });
+												trackServiceScheduleChanges(index);
+											}}
+											isRequired={true}
+										/>
+									)}
+								/>
 								{errors.serviceSchedules?.[index]?.routeId && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].routeId.message}</p>
 								)}
 								<Controller
-  name={`serviceSchedules.${index}.serviceFrequency.type`}
-  control={control}
-  rules={{ required: "Service Frequency is required" }}
-  render={({ field: { onChange, value } }) => (
-    <Dropdown
-      label="Service Frequency"
-      options={serviceFrequencyOptions}
-      value={value}
-      onChange={(e) => {
-        onChange(e);
-        trigger(`serviceSchedules.${index}.serviceFrequency.type`, { shouldFocus: true });
-        trackServiceScheduleChanges(index); 
-      }}
-      isRequired={true}
-      noCursor={field?.isWillCall}
-      listHeight={"max-h-64"}
-    />
-  )}
-/>
+									name={`serviceSchedules.${index}.serviceFrequency.type`}
+									control={control}
+									rules={{ required: "Service Frequency is required" }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Service Frequency"
+											options={serviceFrequencyOptions}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.serviceFrequency.type`, { shouldFocus: true });
+												trackServiceScheduleChanges(index);
+											}}
+											isRequired={true}
+											noCursor={field?.isWillCall}
+											listHeight={"max-h-64"}
+										/>
+									)}
+								/>
 								{errors.serviceSchedules?.[index]?.serviceFrequency?.type && (
 									<p className="text-red-500 text-sm mt-1">
 										{errors.serviceSchedules[index].serviceFrequency.type.message}
@@ -1416,60 +1416,60 @@ const trackServiceScheduleChanges = (index) => {
 								)}
 								{watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM" && (
 									<Controller
-									name={`serviceSchedules.${index}.serviceFrequency.days`}
-									control={control}
-									rules={{ required: "Weekdays are required for multiple times weekly" }}
-									render={({ field: { onChange, value } }) => (
-									  <div className="w-full flex">
-										<p className="w-1/3 whitespace-nowrap truncate">Select Weekdays *</p>
-										<div className="w-2/3">
-										  <MultiSelectRounded
-											value={value}
-											onChange={(e) => {
-											  onChange(e);
-											  if (watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM") {
-												trigger(`serviceSchedules.${index}.serviceFrequency.days`, { shouldFocus: true });
-											  }
-											  trackServiceScheduleChanges(index); 
-											}}
-											options={weekdayOptions}
-											id={`weekdays-input-${index}`}
-											styles="flex flex-col w-full gap-1"
-											margin="0"
-										  />
-										</div>
-									  </div>
-									)}
-								  />
+										name={`serviceSchedules.${index}.serviceFrequency.days`}
+										control={control}
+										rules={{ required: "Weekdays are required for multiple times weekly" }}
+										render={({ field: { onChange, value } }) => (
+											<div className="w-full flex">
+												<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">Select Weekdays *</p>
+												<div className="w-2/3">
+													<MultiSelectRounded
+														value={value}
+														onChange={(e) => {
+															onChange(e);
+															if (watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM") {
+																trigger(`serviceSchedules.${index}.serviceFrequency.days`, { shouldFocus: true });
+															}
+															trackServiceScheduleChanges(index);
+														}}
+														options={weekdayOptions}
+														id={`weekdays-input-${index}`}
+														styles="flex flex-col w-full gap-1"
+														margin="0"
+													/>
+												</div>
+											</div>
+										)}
+									/>
 								)}
 								<div className="flex items-center justify-between my-4">
 									<label htmlFor={`anchorDate-${index}`} className="truncate text-inputLabel font-normal">
 										{field?.isWillCall ? "Will Call Date " : "Anchor Date "}*
 									</label>
 									<div className="w-2/3">
-									<Controller
-  name={`serviceSchedules.${index}.anchorDate`}
-  control={control}
-  rules={{
-    required: "Anchor date is required.",
-  }}
-  render={({ field: { value, onChange } }) => (
-    <CustomDatePicker
-      selectedDate={value}
-      setSelectedDate={(value) => {
-        console.log({ value });
-        onChange(value);
-        trigger(`serviceSchedules.${index}.anchorDate`, { shouldFocus: true });
-        trackServiceScheduleChanges(index); 
-      }}
-      label={"Anchor Date *"}
-      startYear={new Date().getFullYear()}
-      endYear={new Date().getFullYear() + 5}
-      yearReversed={true}
-      minDate={new Date()}
-    />
-  )}
-/>
+										<Controller
+											name={`serviceSchedules.${index}.anchorDate`}
+											control={control}
+											rules={{
+												required: "Anchor date is required.",
+											}}
+											render={({ field: { value, onChange } }) => (
+												<CustomDatePicker
+													selectedDate={value}
+													setSelectedDate={(value) => {
+														console.log({ value });
+														onChange(value);
+														trigger(`serviceSchedules.${index}.anchorDate`, { shouldFocus: true });
+														trackServiceScheduleChanges(index);
+													}}
+													label={"Anchor Date *"}
+													startYear={new Date().getFullYear()}
+													endYear={new Date().getFullYear() + 5}
+													yearReversed={true}
+													minDate={new Date()}
+												/>
+											)}
+										/>
 									</div>
 								</div>
 								{errors.serviceSchedules?.[index]?.anchorDate && (
@@ -1477,171 +1477,171 @@ const trackServiceScheduleChanges = (index) => {
 								)}
 							</div>
 							<div className="w-1/2 ">
-							<Controller
-  name={`serviceSchedules.${index}.serviceType`}
-  control={control}
-  rules={{ required: "Service Type is required." }}
-  render={({ field: { onChange, value } }) => (
-    <Dropdown
-      label="Service Type"
-      id={`service-input-${index}`}
-      options={serviceTypes.map((item) => {
-        if (item.value === "HAZARDOUS_WASTE") {
-          return {
-            label: "Hazardous Waste",
-            value: null,
-            isDisabled: true,
-          };
-        }
-        return {
-          label: item.label,
-          value: item.value,
-        };
-      })}
-      value={value}
-      onChange={(e) => {
-        onChange(e);
-        trigger(`serviceSchedules.${index}.serviceType`, { shouldFocus: true });
-        trackServiceScheduleChanges(index); 
-      }}
-      isRequired={true}
-      disabledBgColor="white"
-      disabledTextColor="gray-300"
-    />
-  )}
-/>
+								<Controller
+									name={`serviceSchedules.${index}.serviceType`}
+									control={control}
+									rules={{ required: "Service Type is required." }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Service Type"
+											id={`service-input-${index}`}
+											options={serviceTypes.map((item) => {
+												if (item.value === "HAZARDOUS_WASTE") {
+													return {
+														label: "Hazardous Waste",
+														value: null,
+														isDisabled: true,
+													};
+												}
+												return {
+													label: item.label,
+													value: item.value,
+												};
+											})}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.serviceType`, { shouldFocus: true });
+												trackServiceScheduleChanges(index);
+											}}
+											isRequired={true}
+											disabledBgColor="white"
+											disabledTextColor="gray-300"
+										/>
+									)}
+								/>
 								{errors.serviceSchedules?.[index]?.serviceType && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
 								)}
 								<Controller
-  name={`serviceSchedules.${index}.serviceDuration`}
-  control={control}
-  rules={{ required: "Service Duration is required." }}
-  render={({ field: { onChange, value } }) => (
-    <Dropdown
-      label="Service Duration"
-      options={serviceDurationOptions}
-      value={value}
-      onChange={(e) => {
-        onChange(e);
-        trigger(`serviceSchedules.${index}.serviceDuration`, { shouldFocus: true });
-        trackServiceScheduleChanges(index); 
-      }}
-      isRequired={true}
-    />
-  )}
-/>
+									name={`serviceSchedules.${index}.serviceDuration`}
+									control={control}
+									rules={{ required: "Service Duration is required." }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Service Duration"
+											options={serviceDurationOptions}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.serviceDuration`, { shouldFocus: true });
+												trackServiceScheduleChanges(index);
+											}}
+											isRequired={true}
+										/>
+									)}
+								/>
 								{errors.serviceSchedules?.[index]?.serviceType && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
 								)}
 								<Controller
-  name={`serviceSchedules.${index}.expectedItemOrService`}
-  control={control}
-  rules={{
-    required: "Expected Container is required.",
-    validate: (value) => {
-      return (
-        value.every((item) => item.quantity >= 1 && item.quantity <= 999) ||
-        "Quantity must be between 1 and 999"
-      );
-    },
-  }}
-  render={({ field: { value, onChange } }) => (
-    <div className="w-full flex flex-col gap-4">
-      <div className="w-full flex">
-        <p className="w-1/3 whitespace-nowrap truncate text-inputLabel">Expected Container(s) *</p>
-        <div className="w-2/3">
-          <MultiSelectRounded
-            isDisabled={!formValues.serviceSchedules[index].serviceType}
-            value={value.map((v) => v.item)}
-            onChange={(selectedItems) => {
-              const transformedItems = selectedItems.map((item) => {
-                const existingItem = value.find((v) => v.item === item);
-                return {
-                  item,
-                  quantity: existingItem ? existingItem.quantity : 1,
-                };
-              });
-              onChange(transformedItems);
-              trigger(`serviceSchedules.${index}.expectedItemOrService`, { shouldFocus: true });
-              trackServiceScheduleChanges(index); 
-            }}
-            options={groupContainersBySubWasteType(
-              itemsOptions.filter((item) =>
-                formValues.serviceSchedules[index].serviceType === SERVICE_TYPES.MEDICAL_WASTE
-                  ? item.subWasteType !== "Paper Shredding"
-                  : item.subWasteType === "Paper Shredding"
-              )
-            )}
-            isRequired={true}
-            id={`expected-items-services-${index}`}
-            styles="flex flex-col w-full gap-1 min-h-9"
-            margin="0"
-          />
-        </div>
-      </div>
-      {value?.length > 0 && value && value?.[0]?.item?.length > 0 && (
-        <div className="mb-4 flex flex-col gap-4">
-          {value.map((itemObj, itemIndex) => (
-            <div key={itemObj.item} className="flex items-center ">
-              <span className="text-base w-1/3 text-inputLabel overflow-ellipsis max-h-9 overflow-visible">
-                {itemsMap?.[itemObj.item]?.length > 40
-                  ? itemsMap?.[itemObj.item]
-                  : itemsMap?.[itemObj.item]}
-              </span>
-              <div className="relative w-2/3">
-                <input
-                  //type="number"
-                  min="1"
-                  max="999"
-                  value={itemObj.quantity}
-                  onChange={(e) => {
-                    const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-                    const updatedItems = [...value];
-                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-                    onChange(updatedItems);
-                    trackServiceScheduleChanges(index); 
-                  }}
-                  className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
-                />
+									name={`serviceSchedules.${index}.expectedItemOrService`}
+									control={control}
+									rules={{
+										required: "Expected Container is required.",
+										validate: (value) => {
+											return (
+												value.every((item) => item.quantity >= 1 && item.quantity <= 999) ||
+												"Quantity must be between 1 and 999"
+											);
+										},
+									}}
+									render={({ field: { value, onChange } }) => (
+										<div className="w-full flex flex-col gap-4">
+											<div className="w-full flex">
+												<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">Expected Container(s) *</p>
+												<div className="w-2/3">
+													<MultiSelectRounded
+														isDisabled={!formValues.serviceSchedules[index].serviceType}
+														value={value.map((v) => v.item)}
+														onChange={(selectedItems) => {
+															const transformedItems = selectedItems.map((item) => {
+																const existingItem = value.find((v) => v.item === item);
+																return {
+																	item,
+																	quantity: existingItem ? existingItem.quantity : 1,
+																};
+															});
+															onChange(transformedItems);
+															trigger(`serviceSchedules.${index}.expectedItemOrService`, { shouldFocus: true });
+															trackServiceScheduleChanges(index);
+														}}
+														options={groupContainersBySubWasteType(
+															itemsOptions.filter((item) =>
+																formValues.serviceSchedules[index].serviceType === SERVICE_TYPES.MEDICAL_WASTE
+																	? item.subWasteType !== "Paper Shredding"
+																	: item.subWasteType === "Paper Shredding"
+															)
+														)}
+														isRequired={true}
+														id={`expected-items-services-${index}`}
+														styles="flex flex-col w-full gap-1 min-h-9"
+														margin="0"
+													/>
+												</div>
+											</div>
+											{value?.length > 0 && value && value?.[0]?.item?.length > 0 && (
+												<div className="mb-4 flex flex-col gap-4">
+													{value.map((itemObj, itemIndex) => (
+														<div key={itemObj.item} className="flex items-center ">
+															<span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap overflow-hidden text-ellipsis">
+																{itemsMap?.[itemObj.item]?.length > 40
+																	? itemsMap?.[itemObj.item]
+																	: itemsMap?.[itemObj.item]}
+															</span>
+															<div className="relative w-2/3">
+																<input
+																	//type="number"
+																	min="1"
+																	max="999"
+																	value={itemObj.quantity}
+																	onChange={(e) => {
+																		const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+																		const updatedItems = [...value];
+																		updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																		onChange(updatedItems);
+																		trackServiceScheduleChanges(index);
+																	}}
+																	className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
+																/>
 
-                {/* Increase Button (Up Arrow) */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newQuantity = Math.min(itemObj.quantity + 1, 999);
-                    const updatedItems = [...value];
-                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-                    onChange(updatedItems);
-                    trackServiceScheduleChanges(index);
-                  }}
-                  className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
-                >
-                  <HiOutlineChevronUp className="w-4 h-4" />
-                </button>
+																{/* Increase Button (Up Arrow) */}
+																<button
+																	type="button"
+																	onClick={() => {
+																		const newQuantity = Math.min(itemObj.quantity + 1, 999);
+																		const updatedItems = [...value];
+																		updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																		onChange(updatedItems);
+																		trackServiceScheduleChanges(index);
+																	}}
+																	className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
+																>
+																	<HiOutlineChevronUp className="w-4 h-4" />
+																</button>
 
-                {/* Decrease Button (Down Arrow) */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newQuantity = Math.max(itemObj.quantity - 1, 1);
-                    const updatedItems = [...value];
-                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-                    onChange(updatedItems);
-                    trackServiceScheduleChanges(index);
-                  }}
-                  className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
-                >
-                  <HiOutlineChevronDown className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )}
-/>
+																{/* Decrease Button (Down Arrow) */}
+																<button
+																	type="button"
+																	onClick={() => {
+																		const newQuantity = Math.max(itemObj.quantity - 1, 1);
+																		const updatedItems = [...value];
+																		updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																		onChange(updatedItems);
+																		trackServiceScheduleChanges(index);
+																	}}
+																	className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
+																>
+																	<HiOutlineChevronDown className="w-4 h-4" />
+																</button>
+															</div>
+														</div>
+													))}
+												</div>
+											)}
+										</div>
+									)}
+								/>
 								{errors.serviceSchedules?.[index]?.expectedItemOrService && (
 									<p className="text-red-500 text-sm mt-1">
 										{errors.serviceSchedules[index].expectedItemOrService?.message}
@@ -1697,6 +1697,10 @@ const trackServiceScheduleChanges = (index) => {
 										type="button"
 										className="rounded-full px-4 py-1 min-w-40 text-sm border border-black hover:bg-cardTextGray hover:bg-opacity-10 "
 										onClick={async () => {
+											if (!formValues?.serviceSchedules[index]?.id) {
+												deleteSchedule(field, index);
+												return;
+											}
 											document.getElementById(`delete-schedule-services-${index}`).showModal();
 										}}
 									>
@@ -1734,7 +1738,6 @@ const trackServiceScheduleChanges = (index) => {
 						<dialog id={`delete-schedule-services-${index}`} className="modal">
 							<div className="modal-box">
 								<div>
-									
 									<button
 										className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
 										type="button"
@@ -1800,10 +1803,9 @@ const trackServiceScheduleChanges = (index) => {
 										control={control}
 										rules={{ required: "Sub Contractor is required" }}
 										render={({ field: { onChange, value } }) => (
-											<>
-												{console.log("sub drop", subContractorData)}
-												<Dropdown
-													label="Sub Contractors"
+											<div className="w-full relative">
+												<SearchableDropdownForParents
+													label={"Sub Contractors"}
 													options={subContractorData
 														?.filter((subContractor) => subContractor.contractorName || subContractor.name)
 														.map((subContractor) => ({
@@ -1821,7 +1823,7 @@ const trackServiceScheduleChanges = (index) => {
 												{errors.selectedSubContractor && (
 													<p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
 												)}
-											</>
+											</div>
 										)}
 									/>
 
@@ -2155,117 +2157,117 @@ const trackServiceScheduleChanges = (index) => {
 					</h6>
 					<div className="w-full flex flex-col md:flex-row gap-8">
 						<div className="w-1/2">
-						<Controller
-  name="deliveryNote"
-  control={instructionControl}
-  render={({ field: { onChange, value } }) => (
-    <Textarea 
-      value={value} 
-      onChange={(e) => {
-        onChange(e);
-        setIsInstructionsChanged(true);
-        setAutoSaveStatus(null);
-      }} 
-      label="Delivery Note (DEL)" 
-    />
-  )}
-/>
+							<Controller
+								name="deliveryNote"
+								control={instructionControl}
+								render={({ field: { onChange, value } }) => (
+									<Textarea
+										value={value}
+										onChange={(e) => {
+											onChange(e);
+											setIsInstructionsChanged(true);
+											setAutoSaveStatus(null);
+										}}
+										label="Delivery Note (DEL)"
+									/>
+								)}
+							/>
 							{errors.deliveryNote && <p className="text-red-500 text-sm mt-1">{errors.deliveryNote.message}</p>}
 							<Controller
-  name="parkingNote"
-  control={instructionControl}
-  render={({ field: { onChange, value } }) => (
-    <Textarea 
-      value={value} 
-      onChange={(e) => {
-        onChange(e);
-        setIsInstructionsChanged(true);
-        setAutoSaveStatus(null);
-      }} 
-      label="Parking Note (PRK)" 
-    />
-  )}
-/>
+								name="parkingNote"
+								control={instructionControl}
+								render={({ field: { onChange, value } }) => (
+									<Textarea
+										value={value}
+										onChange={(e) => {
+											onChange(e);
+											setIsInstructionsChanged(true);
+											setAutoSaveStatus(null);
+										}}
+										label="Parking Note (PRK)"
+									/>
+								)}
+							/>
 							{errors.parkingNote && <p className="text-red-500 text-sm mt-1">{errors.parkingNote.message}</p>}
 							<Controller
-  name="locationOfWaste"
-  control={instructionControl}
-  render={({ field: { onChange, value } }) => (
-    <Textarea 
-      value={value} 
-      onChange={(e) => {
-        onChange(e);
-        setIsInstructionsChanged(true);
-        setAutoSaveStatus(null);
-      }} 
-      label="Location Of Waste (LOC)" 
-    />
-  )}
-/>
+								name="locationOfWaste"
+								control={instructionControl}
+								render={({ field: { onChange, value } }) => (
+									<Textarea
+										value={value}
+										onChange={(e) => {
+											onChange(e);
+											setIsInstructionsChanged(true);
+											setAutoSaveStatus(null);
+										}}
+										label="Location Of Waste (LOC)"
+									/>
+								)}
+							/>
 							{errors.locationOfWaste && <p className="text-red-500 text-sm mt-1">{errors.locationOfWaste.message}</p>}
 						</div>
 						<div className="w-1/2">
-						<Controller
-  name="lockBoxCode"
-  control={instructionControl}
-  render={({ field: { onChange, value } }) => (
-    <Textarea 
-      value={value} 
-      onChange={(e) => {
-        onChange(e);
-        setIsInstructionsChanged(true);
-        setAutoSaveStatus(null);
-      }} 
-      label="Access Code" 
-    />
-  )}
-/>
+							<Controller
+								name="lockBoxCode"
+								control={instructionControl}
+								render={({ field: { onChange, value } }) => (
+									<Textarea
+										value={value}
+										onChange={(e) => {
+											onChange(e);
+											setIsInstructionsChanged(true);
+											setAutoSaveStatus(null);
+										}}
+										label="Access Code"
+									/>
+								)}
+							/>
 							{errors.lockBoxCode && <p className="text-red-500 text-sm mt-1">{errors.lockBoxCode.message}</p>}
 							<Controller
-  name="serviceInstructions"
-  control={instructionControl}
-  render={({ field: { onChange, value } }) => (
-    <Textarea 
-      value={value} 
-      onChange={(e) => {
-        onChange(e);
-        setIsInstructionsChanged(true);
-        setAutoSaveStatus(null);
-      }} 
-      label="Service Instructions" 
-    />
-  )}
-/>
+								name="serviceInstructions"
+								control={instructionControl}
+								render={({ field: { onChange, value } }) => (
+									<Textarea
+										value={value}
+										onChange={(e) => {
+											onChange(e);
+											setIsInstructionsChanged(true);
+											setAutoSaveStatus(null);
+										}}
+										label="Service Instructions"
+									/>
+								)}
+							/>
 							{errors.serviceInstruction && (
 								<p className="text-red-500 text-sm mt-1">{errors.serviceInstruction.message}</p>
 							)}
 							<Controller
-  name="octoConnectNote"
-  control={instructionControl}
-  render={({ field: { onChange, value } }) => (
-    <Textarea 
-      value={value} 
-      onChange={(e) => {
-        onChange(e);
-        setIsInstructionsChanged(true);
-        setAutoSaveStatus(null);
-      }} 
-      label="OCTO Connect" 
-      placeholder={"Contractor's Note"} 
-    />
-  )}
-/>
+								name="octoConnectNote"
+								control={instructionControl}
+								render={({ field: { onChange, value } }) => (
+									<Textarea
+										value={value}
+										onChange={(e) => {
+											onChange(e);
+											setIsInstructionsChanged(true);
+											setAutoSaveStatus(null);
+										}}
+										label="OCTO Connect"
+										placeholder={"Contractor's Note"}
+									/>
+								)}
+							/>
 							{errors.octoConnectNote && <p className="text-red-500 text-sm mt-1">{errors.octoConnectNote.message}</p>}
 						</div>
 					</div>
 				</div>
 				{autoSaveStatus && (
-  <div className="text-right text-sm italic my-2">
-    {autoSaveStatus === 'saving' && <span className="text-gray-500">Saving instructions...</span>}
-    {autoSaveStatus === 'success' && <span className="text-green-500">Instructions saved automatically</span>}
-    {autoSaveStatus === 'error' && <span className="text-red-500">Instructions autosave failed</span>}
-  </div>
-)}
+					<div className="text-right text-sm italic my-2">
+						{autoSaveStatus === "saving" && <span className="text-gray-500">Saving instructions...</span>}
+						{autoSaveStatus === "success" && <span className="text-green-500">Instructions saved automatically</span>}
+						{autoSaveStatus === "error" && <span className="text-red-500">Instructions autosave failed</span>}
+					</div>
+				)}
 				<div className="flex">
 					<button
 						type="submit"
