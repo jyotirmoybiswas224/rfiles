@@ -162,6 +162,17 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const [currentServiceSchedules, setCurrentServiceSchedules] = useState([]);
 	const [isAutoSaving, setIsAutoSaving] = useState(false);
 	const [hasChanges, setHasChanges] = useState(false);
+	const [sentSubcontractorRequests, setSentSubcontractorRequests] = useState([]);
+	const [activeSSRExists, setActiveSSRExists] = useState(false);
+	const [selectedSSRId, setSelectedSSRId] = useState(null);
+	const [viewingPreviousSSR, setViewingPreviousSSR] = useState(false);
+	const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
+ // To track which SSR is being cancelled
+
+// Function to check if there's any pending SSR
+const hasActivePendingSSR = () => {
+	return sentSubcontractorRequests.some(req => req.status === "Pending");
+  };
 
 	const updateGeneratorData = async () => {
 		const data = await getGeneratorById(genId);
@@ -796,6 +807,37 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			showInternalServerErrorToastMessage();
 		}
 	};
+
+	const fetchSentSubcontractorRequests = useCallback(async () => {
+		if (!user?.uid || !generatorData?.id) return;
+		
+		try {
+		  const currentTransporterRef = doc(db, "transporters", user.uid);
+		  const transporterDoc = await getDoc(currentTransporterRef);
+		  
+		  if (transporterDoc.exists()) {
+			const transporterData = transporterDoc.data();
+			const sharedGenerators = transporterData.sharedGenerators?.fromMe || [];
+			
+			// Filter requests for the current generator
+			const generatorRequests = sharedGenerators
+			  .filter(req => req.genId === generatorData.id)
+			  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); // Sort by most recent first
+			
+			setSentSubcontractorRequests(generatorRequests);
+		  }
+		} catch (error) {
+		  console.error("Error fetching sent subcontractor requests:", error);
+		}
+	  }, [user, generatorData]);
+	  
+	  // Add this useEffect to load SSRs when component mounts
+	  useEffect(() => {
+		if (user?.uid && generatorData?.id) {
+		  fetchSentSubcontractorRequests();
+		}
+	  }, [user?.uid, generatorData?.id, fetchSentSubcontractorRequests]);
+
 	const handleCopyToClipboard = async () => {
 		try {
 			let dates = upcomingServices.map((scheduledService) => formattedDate(scheduledService.date));
@@ -1127,68 +1169,162 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const handleSendToSubcontractor = async () => {
 		if (!user || !user?.uid) return;
 		try {
-			const isValid = await trigger();
-			if (!isValid) {
-				console.log("Validation errors:", errors);
-				return;
+		  const isValid = await trigger();
+		  if (!isValid) {
+			console.log("Validation errors:", errors);
+			return;
+		  }
+	  
+		  const formData = getValues();
+	  
+		  const serviceRequest = {
+			genId: generatorData.id,
+			serviceFrequency: formData.serviceSchedules?.serviceFrequency?.type,
+			serviceType: formData.serviceSchedules?.serviceType,
+			serviceDuration: formData.serviceSchedules?.serviceDuration,
+			expectedItemsOrServices: formData.serviceSchedules?.expectedItemOrService || [],
+			serviceNote: formData.serviceNote || "",
+			subcontractorId: formData.selectedSubContractor.id,
+			subContractorName: formData.selectedSubContractor.Cname,
+			status: "Pending",
+			createdAt: new Date().toISOString(),
+			timeStamp: new Date(),
+			id: Date.now().toString() // Add unique ID for reference
+		  };
+	  
+		  const transporterRef = doc(db, "transporters", formData.selectedSubContractor.id);
+		  const transporterDoc = await getDoc(transporterRef);
+	  
+		  if (transporterDoc.exists()) {
+			let transporterData = transporterDoc.data();
+			let sharedGenerators = transporterData.sharedGenerators || {};
+			sharedGenerators.toMe = sharedGenerators.toMe || [];
+			sharedGenerators.toMe.push(serviceRequest);
+			await updateDoc(transporterRef, { sharedGenerators });
+		  } else {
+			console.log("Transporter not found.");
+			return;
+		  }
+	  
+		  const currentTransporterRef = doc(db, "transporters", user?.uid);
+		  const currentransporterDoc = await getDoc(currentTransporterRef);
+	  
+		  if (currentransporterDoc.exists()) {
+			let transporterData = currentransporterDoc.data();
+			let sharedGenerators = transporterData.sharedGenerators || {};
+	  
+			if (!sharedGenerators.fromMe) {
+			  sharedGenerators.fromMe = [];
 			}
-
-			const formData = getValues();
-
-			const serviceRequest = {
-				genId: generatorData.id,
-				serviceFrequency: formData.serviceSchedules?.serviceFrequency?.type,
-				serviceType: formData.serviceSchedules?.serviceType,
-				serviceDuration: formData.serviceSchedules?.serviceDuration,
-				expectedItemsOrServices: formData.serviceSchedules?.expectedItemOrService || [],
-				serviceNote: formData.serviceNote || "",
-				subcontractorId: formData.selectedSubContractor.id,
-				subContractorName: formData.selectedSubContractor.Cname,
-				status: "Pending",
-				createdAt: new Date().toISOString(),
-				timeStamp: new Date(),
-			};
-
-			const transporterRef = doc(db, "transporters", formData.selectedSubContractor.id);
-			const transporterDoc = await getDoc(transporterRef);
-
-			if (transporterDoc.exists()) {
-				let transporterData = transporterDoc.data();
-				let sharedGenerators = transporterData.sharedGenerators || {};
-				sharedGenerators.toMe = sharedGenerators.toMe || [];
-				sharedGenerators.toMe.push(serviceRequest);
-				await updateDoc(transporterRef, { sharedGenerators });
-			} else {
-				console.log("Transporter not found.");
-			}
-
-			const currentTransporterRef = doc(db, "transporters", user?.uid);
-			const currentransporterDoc = await getDoc(currentTransporterRef);
-
-			if (currentransporterDoc.exists()) {
-				let transporterData = currentransporterDoc.data();
-				let sharedGenerators = transporterData.sharedGenerators || {};
-
-				if (!sharedGenerators.fromMe) {
-					sharedGenerators.fromMe = [];
-				}
-
-				sharedGenerators.fromMe.push(serviceRequest);
-				await updateDoc(currentTransporterRef, { sharedGenerators });
-				reset();
-
-				setSuccessMessage("Request successfully sent to the subcontractor!");
-
-				setTimeout(() => {
-					setSuccessMessage("");
-				}, 3000);
-			} else {
-				console.log("Transporter not found.");
-			}
+	  
+			sharedGenerators.fromMe.push(serviceRequest);
+			await updateDoc(currentTransporterRef, { sharedGenerators });
+			
+			// Update local state without resetting form
+			setSentSubcontractorRequests(prev => [serviceRequest, ...prev]);
+			
+			setSuccessMessage("Request successfully sent to the subcontractor!");
+	  
+			setTimeout(() => {
+			  setSuccessMessage("");
+			}, 3000);
+		  } else {
+			console.log("Transporter not found.");
+		  }
 		} catch (error) {
-			console.error("Error sending request:", error);
+		  console.error("Error sending request:", error);
+		  showErrorToastMessage("Error sending request to subcontractor");
 		}
-	};
+	  };
+
+	  const handleCancelCurrentSSR = async () => {
+		if (!cancelReason) {
+		  showErrorToastMessage("Cancellation note is required.");
+		  return;
+		}
+		
+		const ssrToCancel = sentSubcontractorRequests[currentSSRIndex];
+		if (!ssrToCancel || !ssrToCancel.id) {
+		  showErrorToastMessage("Cannot identify the SSR to cancel");
+		  return;
+		}
+		
+		try {
+		  const currentTransporterRef = doc(db, "transporters", user?.uid);
+		  const transporterDoc = await getDoc(currentTransporterRef);
+		  
+		  if (transporterDoc.exists()) {
+			const transporterData = transporterDoc.data();
+			let sharedGenerators = transporterData.sharedGenerators || {};
+			
+			if (sharedGenerators.fromMe && sharedGenerators.fromMe.length) {
+			  // Find the SSR to update
+			  const requestIndex = sharedGenerators.fromMe.findIndex(req => req.id === ssrToCancel.id);
+			  
+			  if (requestIndex !== -1) {
+				// Update the status
+				sharedGenerators.fromMe[requestIndex].status = "Cancelled";
+				sharedGenerators.fromMe[requestIndex].cancellationNote = cancelReason;
+				sharedGenerators.fromMe[requestIndex].cancelledAt = new Date().toISOString();
+				
+				await updateDoc(currentTransporterRef, { sharedGenerators });
+				
+				// Update local state
+				const updatedRequests = sentSubcontractorRequests.map(req => 
+				  req.id === ssrToCancel.id 
+					? {...req, status: "Cancelled", cancellationNote: cancelReason, cancelledAt: new Date().toISOString()} 
+					: req
+				);
+				
+				setSentSubcontractorRequests(updatedRequests);
+				
+				// Reload current SSR in the form with updated data
+				loadSSRIntoForm(updatedRequests[currentSSRIndex], currentSSRIndex);
+				
+				showSuccessToastMessage("Subcontractor request cancelled successfully");
+			  }
+			}
+		  }
+		  
+		  // Close modal and clear cancelReason
+		  document.getElementById(`delete-SSR`).close();
+		  setCancelReason("");
+		  
+		} catch (error) {
+		  console.error("Error cancelling SSR:", error);
+		  showErrorToastMessage("Error cancelling subcontractor request");
+		}
+	  };
+	  const loadSSRIntoForm = (ssr, index) => {
+		// Set form values from the SSR data
+		setValue("selectedSubContractor", {
+		  id: ssr.subcontractorId,
+		  Cname: ssr.subContractorName
+		});
+		
+		setValue("serviceSchedules.serviceFrequency.type", ssr.serviceFrequency);
+		setValue("serviceSchedules.serviceType", ssr.serviceType);
+		setValue("serviceSchedules.serviceDuration", ssr.serviceDuration);
+		setValue("serviceSchedules.expectedItemOrService", ssr.expectedItemsOrServices || []);
+		setValue("serviceNote", ssr.serviceNote || "");
+		
+		// Set state to indicate viewing a previous SSR
+		setViewingPreviousSSR(true);
+		setCurrentSSRIndex(index);
+	  };
+	  
+	  // Function to reset form to blank state for new SSR
+	  const resetFormForNewSSR = () => {
+		setValue("selectedSubContractor", null);
+		setValue("serviceSchedules.serviceFrequency.type", "");
+		setValue("serviceSchedules.serviceType", "");
+		setValue("serviceSchedules.serviceDuration", "15");
+		setValue("serviceSchedules.expectedItemOrService", []);
+		setValue("serviceNote", "");
+		
+		setViewingPreviousSSR(false);
+	  };
+	  
 
 	if (!generatorData) return <Loader />;
 
@@ -1732,291 +1868,421 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						</dialog>
 					</div>
 				))}
-				{showSSRFrom && (
-					<>
-						<div className="pb-4">
-							<div className="flex gap-8 w-full">
-								<div className="w-1/2 space-y-4">
-									{/* Route Dropdown */}
-									<Controller
-										name="selectedSubContractor"
-										control={control}
-										rules={{ required: "Sub Contractor is required" }}
-										render={({ field: { onChange, value } }) => (
-											<div className="w-full relative">
-												<SearchableDropdownForParents
-													label={"Sub Contractors"}
-													options={subContractorData
-														?.filter((subContractor) => subContractor.contractorName || subContractor.name)
-														.map((subContractor) => ({
-															label: subContractor.contractorName || subContractor.name || "--",
-															value: JSON.stringify({
-																id: subContractor.contractorDocid || subContractor.id,
-																Cname: subContractor.contractorName || subContractor.name || "--",
-															}),
-														}))}
-													value={value ? JSON.stringify(value) : ""}
-													onChange={(selectedValue) => onChange(JSON.parse(selectedValue))}
-													isRequired
-													listHeight="max-h-64"
-												/>
-												{errors.selectedSubContractor && (
-													<p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
-												)}
-											</div>
-										)}
-									/>
+			{showSSRFrom && (
+  <>
+    <h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Subcontractor Service Requests (SSR)</h6>
+    
+    {/* Navigation between SSRs */}
+    {sentSubcontractorRequests.length > 0 && (
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex gap-2">
+          {sentSubcontractorRequests.map((ssr, index) => (
+            <button
+              key={ssr.id || index}
+              type="button"
+              className={`px-4 py-1 rounded-full text-sm ${
+                currentSSRIndex === index 
+                  ? 'bg-primary-500 text-white' 
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+              onClick={() => loadSSRIntoForm(ssr, index)}
+            >
+              SSR #{index + 1} 
+              <span className={`ml-1 px-2 py-0.5 rounded-full text-xs ${
+                ssr.status === 'Accepted' ? 'bg-green-100 text-green-800' : 
+                ssr.status === 'Cancelled' ? 'bg-red-100 text-red-800' : 
+                'bg-yellow-100 text-yellow-800'
+              }`}>
+                {ssr.status}
+              </span>
+            </button>
+          ))}
+          {!hasActivePendingSSR() && (
+            <button
+              type="button"
+              className={`px-4 py-1 rounded-full text-sm ${
+                !viewingPreviousSSR 
+                  ? 'bg-primary-500 text-white' 
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+              onClick={resetFormForNewSSR}
+            >
+              + New SSR
+            </button>
+          )}
+        </div>
+        {viewingPreviousSSR && (
+          <div className="text-sm text-gray-500">
+            Created: {new Date(sentSubcontractorRequests[currentSSRIndex].createdAt).toLocaleString()}
+          </div>
+        )}
+      </div>
+    )}
+    
+    {/* The Form - used for both viewing previous SSRs and creating new ones */}
+    <div className="pb-4">
+      <div className="flex gap-8 w-full">
+        <div className="w-1/2 space-y-4">
+          {/* Sub Contractor Dropdown */}
+          <Controller
+            name="selectedSubContractor"
+            control={control}
+            rules={{ required: "Sub Contractor is required" }}
+            render={({ field: { onChange, value } }) => (
+              <div className="w-full relative">
+                <SearchableDropdownForParents
+                  label={"Sub Contractors"}
+                  options={subContractorData
+                    ?.filter((subContractor) => subContractor.contractorName || subContractor.name)
+                    .map((subContractor) => ({
+                      label: subContractor.contractorName || subContractor.name || "--",
+                      value: JSON.stringify({
+                        id: subContractor.contractorDocid || subContractor.id,
+                        Cname: subContractor.contractorName || subContractor.name || "--",
+                      }),
+                    }))}
+                  value={value ? JSON.stringify(value) : ""}
+                  onChange={(selectedValue) => onChange(JSON.parse(selectedValue))}
+                  isRequired
+                  listHeight="max-h-64"
+                  isDisabled={viewingPreviousSSR}
+                />
+                {errors.selectedSubContractor && !viewingPreviousSSR && (
+                  <p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
+                )}
+              </div>
+            )}
+          />
 
-									{/* Service Frequency */}
-									<Controller
-										name="serviceSchedules.serviceFrequency.type"
-										control={control}
-										rules={{ required: "Service Frequency is required" }}
-										render={({ field: { onChange, value } }) => (
-											<>
-												<Dropdown
-													label="Service Frequency"
-													options={serviceFrequencyOptions}
-													value={value}
-													onChange={onChange}
-													isRequired
-													listHeight="max-h-64"
-												/>
-												{errors.serviceSchedules?.serviceFrequency?.type && (
-													<p className="text-red-500 text-sm mt-1">
-														{errors.serviceSchedules.serviceFrequency.type.message}
-													</p>
-												)}
-											</>
-										)}
-									/>
+          {/* Service Frequency */}
+          <Controller
+            name="serviceSchedules.serviceFrequency.type"
+            control={control}
+            rules={{ required: "Service Frequency is required" }}
+            render={({ field: { onChange, value } }) => (
+              <>
+                <Dropdown
+                  label="Service Frequency"
+                  options={serviceFrequencyOptions}
+                  value={value}
+                  onChange={onChange}
+                  isRequired
+                  listHeight="max-h-64"
+                  isDisabled={viewingPreviousSSR}
+                />
+                {errors.serviceSchedules?.serviceFrequency?.type && !viewingPreviousSSR && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.serviceSchedules.serviceFrequency.type.message}
+                  </p>
+                )}
+              </>
+            )}
+          />
 
-									<Controller
-										name="serviceNote"
-										control={control}
-										render={({ field }) => <Textarea {...field} label="Service Note To Subcontractor" />}
-									/>
-								</div>
+          <Controller
+            name="serviceNote"
+            control={control}
+            render={({ field }) => (
+              <Textarea 
+                {...field} 
+                label="Service Note To Subcontractor" 
+                disabled={viewingPreviousSSR}
+              />
+            )}
+          />
+        </div>
 
-								{/* Right Section */}
-								<div className="w-1/2 space-y-4">
-									<Controller
-										name="serviceSchedules.serviceType"
-										control={control}
-										rules={{ required: "Service Type is required" }}
-										render={({ field: { onChange, value } }) => (
-											<>
-												<Dropdown
-													label="Service Type"
-													options={serviceTypes.map((item) => ({
-														label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
-														value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
-														isDisabled: item.value === "HAZARDOUS_WASTE",
-													}))}
-													value={value}
-													onChange={onChange}
-													isRequired
-												/>
-												{errors.serviceSchedules?.serviceType && (
-													<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
-												)}
-											</>
-										)}
-									/>
+        {/* Right Section */}
+        <div className="w-1/2 space-y-4">
+          <Controller
+            name="serviceSchedules.serviceType"
+            control={control}
+            rules={{ required: "Service Type is required" }}
+            render={({ field: { onChange, value } }) => (
+              <>
+                <Dropdown
+                  label="Service Type"
+                  options={serviceTypes.map((item) => ({
+                    label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
+                    value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
+                    isDisabled: item.value === "HAZARDOUS_WASTE",
+                  }))}
+                  value={value}
+                  onChange={onChange}
+                  isRequired
+                  isDisabled={viewingPreviousSSR}
+                />
+                {errors.serviceSchedules?.serviceType && !viewingPreviousSSR && (
+                  <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
+                )}
+              </>
+            )}
+          />
 
-									<Controller
-										name="serviceSchedules.serviceDuration"
-										control={control}
-										rules={{ required: "Service Duration is required" }}
-										defaultValue="15"
-										render={({ field: { onChange, value } }) => (
-											<>
-												<Dropdown
-													label="Service Duration"
-													options={serviceDurationOptions}
-													value={value}
-													onChange={onChange}
-													isRequired
-												/>
-												{errors.serviceSchedules?.serviceDuration && (
-													<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceDuration.message}</p>
-												)}
-											</>
-										)}
-									/>
+          <Controller
+            name="serviceSchedules.serviceDuration"
+            control={control}
+            rules={{ required: "Service Duration is required" }}
+            defaultValue="15"
+            render={({ field: { onChange, value } }) => (
+              <>
+                <Dropdown
+                  label="Service Duration"
+                  options={serviceDurationOptions}
+                  value={value}
+                  onChange={onChange}
+                  isRequired
+                  isDisabled={viewingPreviousSSR}
+                />
+                {errors.serviceSchedules?.serviceDuration && !viewingPreviousSSR && (
+                  <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceDuration.message}</p>
+                )}
+              </>
+            )}
+          />
 
-									<Controller
-										name="serviceSchedules.expectedItemOrService"
-										control={control}
-										rules={{
-											required: "Expected Container is required.",
-											validate: (value) =>
-												value.every((item) => item.quantity >= 1 && item.quantity <= 999) ||
-												"Quantity must be between 1 and 999",
-										}}
-										render={({ field: { value = [], onChange } }) => (
-											<div>
-												<MultiSelectRounded
-													isDisabled={!formValues.serviceSchedules.serviceType}
-													value={value ? value.map((v) => v.item) : []}
-													onChange={(selectedItems) => {
-														const transformedItems = selectedItems.map((item) => {
-															const existingItem = value.find((v) => v.item === item);
-															return {
-																item,
-																quantity: existingItem?.quantity ?? 1, // Default quantity
-															};
-														});
-														onChange(transformedItems);
-													}}
-													options={groupContainersBySubWasteType(itemsOptions)}
-													isRequired
-													label="Expected Container(s)"
-													className="text-inputLabel"
-												/>
+          <Controller
+            name="serviceSchedules.expectedItemOrService"
+            control={control}
+            rules={{
+              required: "Expected Container is required.",
+              validate: (value) =>
+                value.every((item) => item.quantity >= 1 && item.quantity <= 999) ||
+                "Quantity must be between 1 and 999",
+            }}
+            render={({ field: { value = [], onChange } }) => (
+              <div>
+                <MultiSelectRounded
+                  isDisabled={viewingPreviousSSR || !formValues.serviceSchedules?.serviceType}
+                  value={value ? value.map((v) => v.item) : []}
+                  onChange={(selectedItems) => {
+                    const transformedItems = selectedItems.map((item) => {
+                      const existingItem = value.find((v) => v.item === item);
+                      return {
+                        item,
+                        quantity: existingItem?.quantity ?? 1, // Default quantity
+                      };
+                    });
+                    onChange(transformedItems);
+                  }}
+                  options={groupContainersBySubWasteType(itemsOptions)}
+                  isRequired
+                  label="Expected Container(s)"
+                  className="text-inputLabel"
+                />
 
-												{errors.serviceSchedules?.expectedItemOrService && (
-													<p className="text-red-500 text-sm mt-1">
-														{errors.serviceSchedules.expectedItemOrService.message}
-													</p>
-												)}
+                {errors.serviceSchedules?.expectedItemOrService && !viewingPreviousSSR && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.serviceSchedules.expectedItemOrService.message}
+                  </p>
+                )}
 
-												{value?.length > 0 && (
-													<div className="mb-6 flex flex-col gap-2">
-														{value.map((itemObj, itemIndex) => (
-															<div key={itemObj.item} className="flex items-center">
-																<span className="text-base w-1/3 text-inputLabel overflow-ellipsis">
-																	{itemsMap?.[itemObj.item] || itemObj.item}
-																</span>
-																<div className="relative w-2/3">
-																	<input
-																		type="number"
-																		min="1"
-																		max="999"
-																		value={itemObj.quantity || 1}
-																		onChange={(e) => {
-																			const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-																			const updatedItems = [...value];
-																			updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																			onChange(updatedItems);
-																		}}
-																		className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
-																	/>
+                {value?.length > 0 && (
+                  <div className="mb-6 flex flex-col gap-2">
+                    {value.map((itemObj, itemIndex) => (
+                      <div key={itemObj.item} className="flex items-center">
+                        <span className="text-base w-1/3 text-inputLabel overflow-ellipsis">
+                          {itemsMap?.[itemObj.item] || itemObj.item}
+                        </span>
+                        <div className="relative w-2/3">
+                          <input
+                            type="number"
+                            min="1"
+                            max="999"
+                            value={itemObj.quantity || 1}
+                            onChange={(e) => {
+                              if (viewingPreviousSSR) return;
+                              const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+                              const updatedItems = [...value];
+                              updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+                              onChange(updatedItems);
+                            }}
+                            disabled={viewingPreviousSSR}
+                            className={`p-2 pr-8 w-full pl-3 text-left text-sm ${
+                              viewingPreviousSSR ? 'bg-gray-100' : 'bg-inputBg'
+                            } rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none`}
+                          />
 
-																	{/* Increase Button */}
-																	<button
-																		type="button"
-																		onClick={() => {
-																			const newQuantity = Math.min(itemObj.quantity + 1, 999);
-																			const updatedItems = [...value];
-																			updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																			onChange(updatedItems);
-																		}}
-																		className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
-																	>
-																		<HiOutlineChevronUp className="w-4 h-4" />
-																	</button>
+                          {!viewingPreviousSSR && (
+                            <>
+                              {/* Increase Button */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newQuantity = Math.min(itemObj.quantity + 1, 999);
+                                  const updatedItems = [...value];
+                                  updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+                                  onChange(updatedItems);
+                                }}
+                                className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
+                              >
+                                <HiOutlineChevronUp className="w-4 h-4" />
+                              </button>
 
-																	{/* Decrease Button */}
-																	<button
-																		type="button"
-																		onClick={() => {
-																			const newQuantity = Math.max(itemObj.quantity - 1, 1);
-																			const updatedItems = [...value];
-																			updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																			onChange(updatedItems);
-																		}}
-																		className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
-																	>
-																		<HiOutlineChevronDown className="w-4 h-4" />
-																	</button>
-																</div>
-															</div>
-														))}
-													</div>
-												)}
-											</div>
-										)}
-									/>
-								</div>
-							</div>
-						</div>
+                              {/* Decrease Button */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newQuantity = Math.max(itemObj.quantity - 1, 1);
+                                  const updatedItems = [...value];
+                                  updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+                                  onChange(updatedItems);
+                                }}
+                                className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
+                              >
+                                <HiOutlineChevronDown className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          />
+        </div>
+      </div>
+    </div>
 
-						{/* Send To Subcontractor Button */}
+    {/* Action Buttons */}
+    {successMessage && <div className="text-green-500 text-sm p-2 text-right">{successMessage}</div>}
 
-						{successMessage && <div className="text-red-500 text-sm p-2 text-right">{successMessage}</div>}
-
-						<div className="w-full flex justify-end p-2 gap-4">
-							<button
-								type="button"
-								className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
-								onClick={async () => {
-									document.getElementById(`delete-SSR`).showModal();
-								}}
-							>
-								Cancel SSR
-							</button>
-							<button
-								type="button"
-								className="rounded-full px-4 py-2 text-sm  bg-primary-500 hover:bg-primary-500/90 text-white transition"
-								onClick={handleSendToSubcontractor}
-							>
-								Send To Subcontractor
-							</button>
-						</div>
-						<dialog id={`delete-SSR`} className="modal">
-							<div className="modal-box">
-								<div>
-									{/* if there is a button in form, it will close the modal */}
-									<button
-										className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-										type="button"
-										onClick={() => {
-											document.getElementById(`delete-SSR`).close();
-										}}
-									>
-										✕
-									</button>
-								</div>
-								<h3 className="font-bold text-lg">Are you sure?</h3>
-								<div className="flex py-5 gap-5 flex-col">
-									<p className="">Proceeding with this operation will remove the Subcontractor Service Request.</p>
-									<p>Enter Note for Cancellation *</p>
-									<textarea
-										rows={3}
-										onChange={(e) => setCancelReason(e.target.value)}
-										className={` w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none  focus:ring-1 focus:ring-dashInActiveBtnText`}
-									/>
-								</div>
-								<div className="flex w-full justify-between">
-									<button
-										className="btn btn-error btn-sm"
-										type="button"
-										onClick={() => {
-											if (!cancelReason) {
-												showErrorToastMessage("Cancellation note is required.");
-												return;
-											}
-											document.getElementById(`delete-SSR`).close();
-											setShowSSRForm(!showSSRFrom);
-										}}
-									>
-										Remove Schedule
-									</button>
-									<button
-										type="button"
-										className="btn btn-primary btn-sm"
-										onClick={() => {
-											document.getElementById(`delete-SSR`).close();
-										}}
-									>
-										Keep Schedule
-									</button>
-								</div>
-							</div>
-						</dialog>
-					</>
-				)}
+    <div className="w-full flex justify-end p-2 gap-4 mb-4">
+      {viewingPreviousSSR ? (
+        <>
+          {/* Buttons for viewing previous SSR */}
+          {sentSubcontractorRequests[currentSSRIndex]?.status === "Pending" && (
+            <button
+              type="button"
+              className="rounded-full px-4 py-2 text-sm border border-red-500 text-red-500 hover:bg-red-50 transition"
+              onClick={() => document.getElementById(`delete-SSR`).showModal()}
+            >
+              Cancel SSR
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-full px-4 py-2 text-sm bg-gray-400 text-white cursor-not-allowed"
+            disabled
+          >
+            Send To Subcontractor
+          </button>
+        </>
+      ) : (
+        <>
+          {/* Buttons for new SSR */}
+          <button
+            type="button"
+            className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+            onClick={() => {
+              document.getElementById(`delete-SSR-form`).showModal();
+            }}
+          >
+            Cancel SSR
+          </button>
+          <button
+            type="button"
+            className="rounded-full px-4 py-2 text-sm bg-primary-500 hover:bg-primary-500/90 text-white transition"
+            onClick={handleSendToSubcontractor}
+          >
+            Send To Subcontractor
+          </button>
+        </>
+      )}
+    </div>
+    
+    {/* Modals */}
+    <dialog id={`delete-SSR`} className="modal">
+      <div className="modal-box">
+        <div>
+          <button
+            className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+            type="button"
+            onClick={() => {
+              document.getElementById(`delete-SSR`).close();
+              setCancelReason("");
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <h3 className="font-bold text-lg">Cancel Subcontractor Request</h3>
+        <div className="flex py-5 gap-5 flex-col">
+          <p className="">Are you sure you want to cancel this subcontractor service request?</p>
+          <p>Enter Note for Cancellation *</p>
+          <textarea
+            rows={3}
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
+          />
+        </div>
+        <div className="flex w-full justify-between">
+          <button
+            className="btn btn-error btn-sm"
+            type="button"
+            onClick={handleCancelCurrentSSR}
+          >
+            Cancel Request
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => {
+              document.getElementById(`delete-SSR`).close();
+              setCancelReason("");
+            }}
+          >
+            Keep Request
+          </button>
+        </div>
+      </div>
+    </dialog>
+    
+    <dialog id={`delete-SSR-form`} className="modal">
+      <div className="modal-box">
+        <div>
+          <button
+            className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+            type="button"
+            onClick={() => {
+              document.getElementById(`delete-SSR-form`).close();
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <h3 className="font-bold text-lg">Are you sure?</h3>
+        <div className="flex py-5 gap-5 flex-col">
+          <p className="">This will close the SSR form without saving. Continue?</p>
+        </div>
+        <div className="flex w-full justify-between">
+          <button
+            className="btn btn-error btn-sm"
+            type="button"
+            onClick={() => {
+              document.getElementById(`delete-SSR-form`).close();
+              setShowSSRForm(false);
+            }}
+          >
+            Close Form
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => {
+              document.getElementById(`delete-SSR-form`).close();
+            }}
+          >
+            Continue Editing
+          </button>
+        </div>
+      </div>
+    </dialog>
+  </>
+)}
 				<div className="grid items-center justify-center relative">
 					{renderSSRButton()}
 					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
