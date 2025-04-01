@@ -1,0 +1,127 @@
+import { useState, useEffect, useRef } from "react";
+import { HiOutlineChevronDown } from "react-icons/hi";
+import { octoFormatter } from "../../../../../utils/helpers";
+
+const ChildDropdown = ({
+	selectedValue,
+	setSelectedValue,
+	isParentWithChildren,
+	isparent,
+	generatorData,
+	parentGenerator,
+	childrenData,
+	sameParentGenerators,
+	getGeneratorById,
+	setGeneratorData,
+}) => {
+	const [isOpen, setIsOpen] = useState(false);
+	const [selectedDisplayText, setSelectedDisplayText] = useState("Select Location");
+	const dropdownRef = useRef(null);
+
+	const handleSelectChange = async (selectedId, displayText) => {
+		if (selectedId) {
+			const gendata = await getGeneratorById(selectedId);
+			setGeneratorData(gendata);
+			setSelectedValue(selectedId);
+			setSelectedDisplayText(displayText);
+			setIsOpen(false);
+		}
+	};
+
+	const formatOctoNumber = (octoNumber) => {
+		if (!octoNumber) return "";
+		if (/^G-\d{3}-\d{4}$/.test(octoNumber)) {
+			return octoNumber;
+		}
+
+		if (/^\d+$/.test(octoNumber)) {
+			let numStr = octoNumber.padStart(7, "0");
+			return `G-${numStr.slice(0, 3)}-${numStr.slice(3)}`;
+		}
+		return octoNumber;
+	};
+
+	useEffect(() => {
+		const handleClickOutside = (event) => {
+			if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+				setIsOpen(false);
+			}
+		};
+
+		if (isOpen) {
+			document.addEventListener("mousedown", handleClickOutside);
+		} else {
+			document.removeEventListener("mousedown", handleClickOutside);
+		}
+
+		return () => document.removeEventListener("mousedown", handleClickOutside);
+	}, [isOpen]);
+
+	return (
+		<div className="relative w-full" ref={dropdownRef}>
+			<button
+				className={`w-full flex justify-between items-center px-4 py-2 bg-white border rounded-full focus:outline-none disabled:opacity-50 ${
+					!isparent || !isParentWithChildren ? "opacity-50 cursor-not-allowed" : ""
+				}`}
+				onClick={() => isparent && isParentWithChildren && setIsOpen(!isOpen)}
+				disabled={!isparent || !isParentWithChildren}
+				style={{
+					backgroundColor: "white",
+					WebkitTextFillColor: "black",
+					opacity: 1,
+				}}
+			>
+				<span className="truncate max-w-[80%] overflow-hidden text-ellipsis">{selectedDisplayText}</span>
+				<HiOutlineChevronDown
+					className={`h-5 w-5 text-cardTextGray transition-transform duration-250 flex-shrink-0 ${
+						isOpen ? "transform rotate-180" : ""
+					}`}
+				/>
+			</button>
+
+			{isOpen && (
+				<ul className="absolute z-10 w-full mt-2 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+					{generatorData?.parentAccount && (
+						<li className="bg-cardTextBlue text-white px-4 py-2 cursor-not-allowed">Parent Account</li>
+					)}
+					{generatorData?.parentAccount &&
+						parentGenerator?.map((child, index) => {
+							const displayText = ` ${child.octoNumber ? formatOctoNumber(child.octoNumber) : ""} ${
+								" , " + child.generatorName || ""
+							}`;
+							return (
+								<li
+									key={index}
+									className="px-4 py-2 hover:bg-gray-200 cursor-pointer"
+									onClick={() => handleSelectChange(child.id, displayText)}
+								>
+									{displayText}
+								</li>
+							);
+						})}
+
+					{generatorData && <li className="bg-cardTextBlue text-white px-4 py-2 cursor-not-allowed">Child Accounts</li>}
+					{(isParentWithChildren && isparent && !generatorData?.parentAccount
+						? childrenData
+						: sameParentGenerators
+					)?.map((child, index) => {
+						const displayText = ` ${child.octoNumber ? formatOctoNumber(child.octoNumber) : ""} ${
+							" , " + child.generatorName || ""
+						}`;
+						return (
+							<li
+								key={index}
+								className="px-4 py-2 hover:bg-gray-200 cursor-pointer"
+								onClick={() => handleSelectChange(child.id, displayText)}
+							>
+								{displayText}
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</div>
+	);
+};
+
+export default ChildDropdown;
