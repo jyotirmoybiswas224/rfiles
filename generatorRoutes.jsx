@@ -1991,21 +1991,25 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 						{
 							<div className="w-full flex justify-end p-2 gap-5">
-								{fields.length > 0 && (
-									<button
-										type="button"
-										className="rounded-full px-4 py-1 min-w-40 text-sm border border-black hover:bg-cardTextGray hover:bg-opacity-10 "
-										onClick={async () => {
-											document.getElementById(`delete-schedule-services-${index}`).showModal();
-										}}
-									>
-										{currentServiceSchedules.find((el) => el.id === watchServiceSchedules[index]?.id)?.isProcessing ? (
-											<Loader height="h-8 pt-1.5" />
-										) : (
-											"Remove service schedule"
-										)}
-									</button>
-								)}
+{fields.length > 0 && (
+  <button
+    type="button"
+    className="rounded-full px-4 py-1 min-w-40 text-sm border border-black hover:bg-cardTextGray hover:bg-opacity-10 "
+    onClick={async () => {
+      if (watchServiceSchedules[index]?.id) {
+        document.getElementById(`delete-schedule-services-${index}`).showModal();
+      } else {
+        remove(index);
+      }
+    }}
+  >
+    {currentServiceSchedules.find((el) => el.id === watchServiceSchedules[index]?.id)?.isProcessing ? (
+      <Loader height="h-8 pt-1.5" />
+    ) : (
+      "Remove service schedule"
+    )}
+  </button>
+)}
 								<button
 									type="button"
 									disabled={
@@ -2095,24 +2099,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
     
     {sentSubcontractorRequests.length > 0 && (
       <div>
-        <h3 className="text-md font-medium mb-4">Previous Service Requests</h3>
         
         {sentSubcontractorRequests.map((ssr, index) => (
-          <div key={ssr.id || index} className="mb-8 pb-4 border-b border-gray-200">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-2">
-                <span className={`ml-1 px-2 py-1 rounded-full text-xs ${
-                  ssr.status === 'Accepted' ? 'bg-green-100 text-green-800' : 
-                  ssr.status === 'Cancelled' ? 'bg-red-100 text-red-800' : 
-                  'bg-yellow-100 text-yellow-800'
-                }`}>
-                  {ssr.status}
-                </span>
-              </div>
-              <div className="text-sm text-gray-500">
-                Created: {new Date(ssr.createdAt).toLocaleString()}
-              </div>
-            </div>
+          <div key={ssr.id || index} className="mb-8 pb-4 ">
             
             {renderSSRForm(true, ssr)}
 			<div className="w-full flex justify-end p-2 gap-4">
@@ -2134,7 +2123,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
       </div>
     )}
 	<div className="mb-8 pb-4 border-b border-gray-200">
-        <h3 className="text-md font-medium mb-4">Create New Service Request</h3>
         {renderSSRForm(false, null)}
         
         {/* Action Buttons for New SSR */}
@@ -2398,12 +2386,12 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						</div>
 						<p className="truncate">Priority</p>
 					</div>
-					<div className="w-[8%] min-w-[80px] shrink-0">Date</div>
+					<div className="w-[8%] min-w-[120px] shrink-0">Date</div>
 					<div className="w-[10%] min-w-[90px] shrink-0">Operating Hours</div>
 					<div className="w-[10%] min-w-[90px] shrink-0">Route Info</div>
 					<div className="w-[18%] min-w-[150px] shrink-0 px-2">Temporary Service Instructions</div>
-					<div className="w-[2%] min-w-[10px] shrink-0"></div>
-					<div className="w-[15%] min-w-[120px] shrink-0">Service Type</div>
+					<div className="w-[2%] min-w-[20px] shrink-0"></div>
+					<div className="w-[15%] min-w-[100px] shrink-0">Service Type</div>
 					<div className="w-[2%] min-w-[10px] shrink-0"></div>
 					<div className="w-[15%] min-w-[120px] shrink-0">Action</div>
 				</div>
@@ -2453,12 +2441,12 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 										/>
 									</div>
 									<span
-										className={service?.isPriority ? "text-red-500 text-xs ml-1 truncate" : "text-xs ml-1 truncate"}
+										className={service?.isPriority ? "text-red-500 text-sm ml-1 truncate" : "text-sm ml-1 truncate"}
 									>
 										{service?.isPriority ? "High Priority" : "Normal Priority"}
 									</span>
 								</div>
-								<div className="w-[8%] min-w-[80px] shrink-0 truncate text-xs">
+								<div className="w-[8%] min-w-[120px] shrink-0 truncate text-sm">
 									{service?.date ? formatUtcDateString(service.date.toDate().toUTCString()) : "--"}
 								</div>
 								<div className="w-[10%] min-w-[90px] shrink-0 truncate">
@@ -2468,7 +2456,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 									(<NoOfStops serviceDate={service?.date?.toDate()} routeId={service.routeId} />){" "}
 									{service.routeData?.routeLabel.length > 0 ? service.routeData?.routeLabel + " " : "N/A"}
 								</div>
-								<div className="w-[18%] min-w-[150px] shrink-0">
+								<div className="w-[18%] min-w-[100px] shrink-0">
 									<input
 										type="text"
 										defaultValue={service?.temporaryServiceInstruction ?? ""}
