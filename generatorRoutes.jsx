@@ -810,8 +810,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			const transporterData = transporterDoc.data();
 			const sharedGenerators = transporterData.sharedGenerators?.fromMe || [];
 			
+			// Filter out the SSRs with status "Cancelled"
 			const generatorRequests = sharedGenerators
-			  .filter(req => req.genId === generatorData.id&&req.status!="Cancelled")
+			  .filter(req => req.genId === generatorData.id && req.status !== "Cancelled")
 			  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 			
 			setSentSubcontractorRequests(generatorRequests);
@@ -856,6 +857,12 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	//     document.removeEventListener("mousedown", handleClickOutside);
 	//   };
 	// }, [showSSRFrom]);
+	const handleCancelNewSSR = () => {
+		setShowSSRForm(false);
+		resetFormForNewSSR();
+		setCancelReason("");
+		document.getElementById(`delete-SSR`).close();
+	  };
 
 	const renderSSRButton = () => {
 		let isDisable = false;
@@ -1494,15 +1501,12 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				
 				await updateDoc(currentTransporterRef, { sharedGenerators });
 				
-				const updatedRequests = sentSubcontractorRequests.map(req => 
-				  req.id === ssrToCancel.id 
-					? {...req, status: "Cancelled", cancellationNote: cancelReason, cancelledAt: new Date().toISOString()} 
-					: req
-				);
-				
+				// Remove the cancelled SSR from the UI
+				const updatedRequests = sentSubcontractorRequests.filter(req => req.id !== ssrToCancel.id);
 				setSentSubcontractorRequests(updatedRequests);
 				
-				loadSSRIntoForm(updatedRequests[currentSSRIndex], currentSSRIndex);
+				// Reset form and viewing state
+				resetFormForNewSSR();
 				
 				showSuccessToastMessage("Subcontractor request cancelled successfully");
 			  }
@@ -1516,21 +1520,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		  console.error("Error cancelling SSR:", error);
 		  showErrorToastMessage("Error cancelling subcontractor request");
 		}
-	  };
-	  const loadSSRIntoForm = (ssr, index) => {
-		setValue("selectedSubContractor", {
-		  id: ssr.subcontractorId,
-		  Cname: ssr.subContractorName
-		});
-		
-		setValue("serviceSchedules.serviceFrequency.type", ssr.serviceFrequency);
-		setValue("serviceSchedules.serviceType", ssr.serviceType);
-		setValue("serviceSchedules.serviceDuration", ssr.serviceDuration);
-		setValue("serviceSchedules.expectedItemOrService", ssr.expectedItemsOrServices || []);
-		setValue("serviceNote", ssr.serviceNote || "");
-		
-		setViewingPreviousSSR(true);
-		setCurrentSSRIndex(index);
 	  };
 	  
 	  const resetFormForNewSSR = () => {
@@ -2132,9 +2121,13 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		<button
             type="button"
             className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition "
-            onClick={() => {
-              document.getElementById(`delete-SSR`).showModal();
-            }}
+			onClick={() => {
+				if (viewingPreviousSSR) {
+				  document.getElementById(`delete-SSR`).showModal();
+				} else {
+				  handleCancelNewSSR();
+				}
+			  }}
           >
             Cancel
           </button>
