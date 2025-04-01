@@ -810,8 +810,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			const transporterData = transporterDoc.data();
 			const sharedGenerators = transporterData.sharedGenerators?.fromMe || [];
 			
+			// Remove the status filter to include accepted SSRs
 			const generatorRequests = sharedGenerators
-			  .filter(req => req.genId === generatorData.id&&req.status!="Cancelled")
+			  .filter(req => req.genId === generatorData.id)
 			  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 			
 			setSentSubcontractorRequests(generatorRequests);
