@@ -1473,16 +1473,18 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	  const handleCancelCurrentSSR = async () => {
 		if (!cancelReason) {
-		  showErrorToastMessage("Cancellation note is required.");
-		  return;
-		}
-		
-		const ssrToCancel = sentSubcontractorRequests[currentSSRIndex];
-		if (!ssrToCancel || !ssrToCancel.id) {
-		  showErrorToastMessage("Cannot identify the SSR to cancel");
-		  return;
-		}
-		
+			showErrorToastMessage("Cancellation note is required.");
+			return;
+		  }
+		  
+		  console.log("Current index:", currentSSRIndex);
+		  console.log("SSRs available:", sentSubcontractorRequests);
+		  
+		  const ssrToCancel = sentSubcontractorRequests[currentSSRIndex];
+		  if (!ssrToCancel || !ssrToCancel.id) {
+			showErrorToastMessage("Cannot identify the SSR to cancel");
+			return;
+		  }
 		try {
 		  const currentTransporterRef = doc(db, "transporters", user?.uid);
 		  const transporterDoc = await getDoc(currentTransporterRef);
@@ -2082,20 +2084,23 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
     
     {sentSubcontractorRequests.length > 0 && (
       <div>     
-        {sentSubcontractorRequests.map((ssr, index) => (
-          <div key={ssr.id || index} className="mb-8 pb-4 ">            
-            {renderSSRForm(true, ssr)}
+       {sentSubcontractorRequests.map((ssr, index) => (
+  <div key={ssr.id || index} className="mb-8 pb-4">
+    <div onClick={() => setCurrentSSRIndex(index)}>
+      {renderSSRForm(true, ssr)}
+    </div>
 			<div className="w-full flex justify-end p-2 gap-4">
 
 			<button
-            type="button"
-            className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition "
-            onClick={() => {
-              document.getElementById(`delete-SSR`).showModal();
-            }}
-          >
-            Cancel
-          </button>
+  type="button"
+  className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+  onClick={() => {
+    setCurrentSSRIndex(index); 
+    document.getElementById(`delete-SSR`).showModal();
+  }}
+>
+  Cancel
+</button>
 		  <button
             type="button"
             className="rounded-full px-4 py-2 text-sm bg-primary-500 hover:bg-primary-500/90 text-white transition disabled:bg-cardTextGray"
