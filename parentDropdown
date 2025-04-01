@@ -1,0 +1,105 @@
+import { HiOutlineChevronDown } from "react-icons/hi";
+import { useState, useEffect, useRef } from "react";
+
+const ParentDropdown = ({ isParent, generatorData, parentGenerator, handleChildChange }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedValue, setSelectedValue] = useState(null);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!generatorData) return;
+    const parentAccount = generatorData.parentAccount
+      ? parentGenerator?.find((gen) => gen.id === generatorData.parentAccount)
+      : generatorData;
+
+    setSelectedValue(parentAccount);
+  }, [generatorData, parentGenerator]);
+
+  const handleSelect = (value) => {
+    const selectedParent = parentGenerator?.find((gen) => gen.id === value);
+    setSelectedValue(selectedParent);
+    handleChildChange({ target: { value } });
+    setIsOpen(false);
+  };
+
+  const handleClickOutside = (event) => {
+    if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+      setIsOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+  
+  const formatOctoNumber = (octoNumber) => {
+    if (!octoNumber) return "";
+    if (/^G-\d{3}-\d{4}$/.test(octoNumber)) {
+      return octoNumber;
+    }
+  
+    if (/^\d+$/.test(octoNumber)) {
+      let numStr = octoNumber.padStart(7, "0"); 
+      return `G-${numStr.slice(0, 3)}-${numStr.slice(3)}`;
+    }
+    return octoNumber;
+  };
+  
+
+  return (
+    <div className="relative w-full" ref={dropdownRef}>
+      <button
+        className="w-full flex justify-between items-center px-4 py-2 bg-white border rounded-full focus:outline-none disabled:opacity-50"
+        onClick={() => setIsOpen(!isOpen)}
+        disabled={true} 
+        style={{
+          backgroundColor: "white",
+          //color: "white",
+          //cursor: "not-allowed",
+          WebkitTextFillColor: "black",
+          opacity: 1,
+
+        }}
+      >
+        <span className="text-black truncate">
+          {selectedValue
+            ? `${selectedValue.generatorName ? selectedValue.generatorName + ", " : ""}
+              ${selectedValue.octoNumber ? formatOctoNumber(selectedValue.octoNumber) + ", " : ""}
+              ${selectedValue.serviceAddress?.suite ? selectedValue.serviceAddress.suite + ", " : ""}
+              ${selectedValue.serviceAddress?.city ? selectedValue.serviceAddress.city + ", " : ""}
+              ${selectedValue.serviceAddress?.state ? selectedValue.serviceAddress.state + " " : ""}
+              ${selectedValue.serviceAddress?.zipCode ? selectedValue.serviceAddress.zipCode : ""}`
+            : "Select Parent"}
+        </span>
+        <HiOutlineChevronDown
+         className={`h-5 w-5 text-cardTextGray transition-transform duration-250 flex-shrink-0 ${
+         isOpen ? "transform rotate-180" : "" }`} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 right-0 mt-2 bg-white border rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
+          {parentGenerator?.map((child) => (
+            <div
+              key={child.id}
+              className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+              onClick={() => handleSelect(child.id)}
+            >
+              {child.generatorName ? child.generatorName + ", " : ""}
+              {child.octoNumber > 0 ? formatOctoNumber(child.octoNumber) + ", " : ""}
+              {child.serviceAddress?.street ? child.serviceAddress.street + ", " : ""}
+              {child.serviceAddress?.suite ? child.serviceAddress.suite + ", " : ""}
+              {child.serviceAddress?.city ? child.serviceAddress.city + ", " : ""}
+              {child.serviceAddress?.state ? child.serviceAddress.state + " " : ""}
+              {child.serviceAddress?.zipCode ? child.serviceAddress.zipCode : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ParentDropdown;
