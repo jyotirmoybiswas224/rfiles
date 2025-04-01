@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircleIcon, ClockIcon, ArrowRightIcon } from "lucide-react";
 import {
 	onSnapshot,
@@ -34,6 +34,11 @@ import { useGeneratorData } from "./components/GeneratorDataContext";
 import ChildDropdown from "./components/dropDowns/childDropdown";
 import ParentDropdown from "./components/dropDowns/parentDropdown";
 import GeneratorUserAccBtn from "../GenUserAccountButton/GeneratorUserAccountButton";
+// Add this at the top of your dashboard component
+import { useCallback } from "react";
+import debounce from 'lodash/debounce'; // You'll need to install lodash if not already there
+
+
 
 const GeneratorDashboard = () => {
 	const { user, authLoading, generatorData: data, allServices: genService } = useGeneratorUser();
@@ -65,6 +70,14 @@ const GeneratorDashboard = () => {
 	const [serviceCompletionText, setServiceCompletionText] = useState("");
 	const [todayStartedRoute, setTodayStartedRoute] = useState();
 
+	const debouncedProcessSelectedRouteData = useCallback(
+		debounce((selectedService, routeData, generatorRoutesForDay) => {
+		  processSelectedRouteData(selectedService, routeData, generatorRoutesForDay);
+		}, 300),
+		[generatorData?.id]
+	  );
+  
+ 
 	useEffect(() => {
 		if (!data?.id) return;
 		setGeneratorData(data);
@@ -295,6 +308,16 @@ const GeneratorDashboard = () => {
 			//setIsLoadingServices(false);
 		}
 	};
+	useEffect(() => {
+		if (generatorData?.id) {
+		  // Reset tracking state when generator changes
+		  setProgressbar("0%");
+		  setWaypointsRemaining("Stops Remaining");
+		  setGeneratorWaypointCompleted(false);
+		  setServiceCompletionText("");
+		  setStopsRemaining(0);
+		}
+	  }, [generatorData?.id]);
 
 	const nextServiceDateString = todayService?.[0]?.date ? todayService[0].date.toDate().toISOString() : null;
 	const startDate = new Date();
@@ -384,8 +407,10 @@ const GeneratorDashboard = () => {
 						})
 					);
 
-					setRouteStarted(anyRouteStarted);
-
+					setRouteStarted(anyRouteStarted || 
+						(selectedService && (selectedService.status === "PENDING" || selectedService.status === "INPROGRESS"))
+					  );
+					  
 					if (todayStartedRoute) {
 						try {
 							const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, todayStartedRoute.id));
@@ -435,8 +460,7 @@ const GeneratorDashboard = () => {
 							if (!dailyRouteSnapshot.exists()) return;
 
 							const routeData = dailyRouteSnapshot.data();
-							await processSelectedRouteData(selectedService, routeData, generatorRoutesForDay);
-
+                            debouncedProcessSelectedRouteData(selectedService, routeData, generatorRoutesForDay);
 							try {
 								const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, selectedService.id));
 								if (serviceDoc.exists() && serviceDoc.data().status === "COMPLETE") {
@@ -461,9 +485,122 @@ const GeneratorDashboard = () => {
 		unsubscribers.push(servicesUnsubscribe);
 
 		return () => {
-			unsubscribers.forEach((unsub) => unsub());
-		};
+			console.log("Cleaning up all listeners");
+			unsubscribers.forEach((unsub) => {
+			  if (typeof unsub === 'function') unsub();
+			});
+			// Also reset key state when unmounting
+			setProgressbar("0%");
+			setWaypointsRemaining("Stops Remaining");
+			setGeneratorWaypointCompleted(false);
+		  };
 	}, [generatorData, generatorWaypointCompleted, nextServiceDateString, serviceCompletionText]);
+	// Add this useEffect to update routeStarted when todayService changes
+useEffect(() => {
+	if (!todayService || todayService.length === 0) {
+	  return;
+	}
+	
+	const pendingOrInProgressService = todayService.find(service => 
+	  service.status === "PENDING" || service.status === "INPROGRESS"
+	);
+	
+	if (pendingOrInProgressService) {
+	  setRouteStarted(true);
+	  
+	  // If we have a pending/in-progress service, make sure it's the one we're tracking
+	  if (!todayStartedRoute || todayStartedRoute.id !== pendingOrInProgressService.id) {
+		setTodayStartedRoute(pendingOrInProgressService);
+	  }
+	}
+  }, [todayService]);
+
+	const TrackingWidgetContent = useMemo(() => {
+		return (
+			<div className="bg-white rounded-xl shadow-md flex flex-col gap-5 relative p-5 justify-center h-full">
+			<div className="absolute top-0 right-0 text-sm">
+				<p className="p-5">{serviceCompletionText}</p>
+			</div>
+			<div>
+				<h2 className="text-lg font-bold text-left">Live Track</h2>
+			</div>
+			<div className="text-lg font-bold h-1/2 mt-auto flex items-end">
+				{todayService?.[0]?.date &&
+				nextService?.[0]?.date &&
+				formatUtcDateString(todayService[0].date.toDate()) === formatUtcDateString(nextService[0].date.toDate())
+					? "Tracking "
+					: "Check Back On: "}
+				(
+				{nextService?.[0]?.date && nextService[0].date.toDate() instanceof Date
+					? formatUtcDateString(nextService[0].date.toDate())
+					: "N/A"}
+				)
+			</div>
+
+			<div className="h-1/2">
+				<div className="relative w-full bg-gray-200 rounded-full h-3 ">
+					<div
+						className={`${!completed ? "bg-blue-500" : "bg-green-500"} h-3 rounded-full`}
+						style={{
+							width: generatorWaypointCompleted
+								? "100%"
+								: waypointsRemaining === "Arriving Next"
+								? "90%"
+								: routeStarted
+								? `${progressBar}%`
+								: "0%",
+						}}
+					/>
+					<div className="flex justify-between items-center absolute w-full top-4 -translate-y-1/2">
+						{/* Route Started Icon */}
+						<div className="flex flex-col ">
+							<CheckCircleIcon
+								className={`w-7 h-7 ${
+									routeStarted || generatorWaypointCompleted
+										? "bg-blue-500 text-white"
+										: "text-gray-300 bg-gray-200"
+								} rounded-full `}
+							/>
+							<span
+								className={`${routeStarted || generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}  `}
+							>
+								Route Started
+							</span>
+						</div>
+						{/* Waypoints Remaining Circle */}
+						<div className="flex flex-col items-center">
+							<div
+								className={`w-7 h-7 ${
+									routeStarted || generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"
+								} rounded-full flex items-center justify-center text-white`}
+							>
+								{routeStarted && waypointsRemaining !== "Arriving Next" && !generatorWaypointCompleted && (
+									<p>{stopsRemaining}</p>
+								)}
+							</div>
+							<span
+								className={`${
+									routeStarted || waypointsRemaining == "Arriving Next" ? "text-blue-500" : "text-gray-700"
+								}`}
+							>
+								{waypointsRemaining}
+							</span>
+						</div>
+						{/* Service Completed Icon */}
+						<div className="flex flex-col items-end ">
+							<div
+								className={`w-7 h-7 ${generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"} rounded-full`}
+							></div>
+							<span className={`${generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}`}>
+								Service Completed
+							</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		);
+	  }, [progressBar, waypointsRemaining, stopsRemaining, generatorWaypointCompleted, serviceCompletionText]);
 
 	async function processSelectedRouteData(selectedService, routeData, generatorRoutesForDay) {
 		if (!selectedService || !routeData) return;
@@ -559,22 +696,32 @@ const GeneratorDashboard = () => {
 			}
 
 			setStopsRemaining(pendingCount);
-			setWaypointsRemaining(
-				pendingCount === 0 ||
-					curentGenStatus.data().status === "INPROGRESS" ||
-					generatorWaypointIndex !== firstOccurrenceIndex
-					? "Arriving Next"
-					: "Stops Remaining"
-			);
-			console.log(
-				"progr",
-				progress,
-				pendingCount,
-				firstOccurrenceIndex,
-				generatorWaypointIndex,
-				curentGenStatus.data().status,
-				generatorWaypointCompleted
-			);
+
+// Set waypointsRemaining based on current service status
+if (curentGenStatus && curentGenStatus.data()) {
+  const currentStatus = curentGenStatus.data().status;
+  
+  if (currentStatus === "INPROGRESS") {
+    setWaypointsRemaining("Arriving Next");
+    setRouteStarted(true);  // Explicitly set route as started
+  } else if (currentStatus === "PENDING" && pendingCount > 0) {
+    setWaypointsRemaining("Stops Remaining"); 
+    setRouteStarted(true);  // Explicitly set route as started
+  } else if (pendingCount === 0) {
+    setWaypointsRemaining("Arriving Next");
+  } else {
+    setWaypointsRemaining("Stops Remaining");
+  }
+}
+
+// Also add this debug log
+console.log("Service status update:", {
+  status: curentGenStatus?.data()?.status,
+  pendingCount,
+  waypointsRemaining,
+  routeStartedNow: curentGenStatus?.data()?.status === "INPROGRESS" || 
+                  (curentGenStatus?.data()?.status === "PENDING" && pendingCount > 0)
+});
 
 			const currentServiceId = routeData.waypoints[generatorWaypointIndex].serviceId;
 
@@ -1002,88 +1149,7 @@ const GeneratorDashboard = () => {
 						</div>
 					</div>
 				</div>
-				<div className="bg-white rounded-xl shadow-md flex flex-col gap-5 relative p-5 justify-center h-full">
-					<div className="absolute top-0 right-0 text-sm">
-						<p className="p-5">{serviceCompletionText}</p>
-					</div>
-					<div>
-						<h2 className="text-lg font-bold text-left">Live Track</h2>
-					</div>
-					<div className="text-lg font-bold h-1/2 mt-auto flex items-end">
-						{todayService?.[0]?.date &&
-						nextService?.[0]?.date &&
-						formatUtcDateString(todayService[0].date.toDate()) === formatUtcDateString(nextService[0].date.toDate())
-							? "Tracking "
-							: "Check Back On: "}
-						(
-						{nextService?.[0]?.date && nextService[0].date.toDate() instanceof Date
-							? formatUtcDateString(nextService[0].date.toDate())
-							: "N/A"}
-						)
-					</div>
-
-					<div className="h-1/2">
-						<div className="relative w-full bg-gray-200 rounded-full h-3 ">
-							<div
-								className={`${!completed ? "bg-blue-500" : "bg-green-500"} h-3 rounded-full`}
-								style={{
-									width: generatorWaypointCompleted
-										? "100%"
-										: waypointsRemaining === "Arriving Next"
-										? "90%"
-										: routeStarted
-										? `${progressBar}%`
-										: "0%",
-								}}
-							/>
-							<div className="flex justify-between items-center absolute w-full top-4 -translate-y-1/2">
-								{/* Route Started Icon */}
-								<div className="flex flex-col ">
-									<CheckCircleIcon
-										className={`w-7 h-7 ${
-											routeStarted || generatorWaypointCompleted
-												? "bg-blue-500 text-white"
-												: "text-gray-300 bg-gray-200"
-										} rounded-full `}
-									/>
-									<span
-										className={`${routeStarted || generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}  `}
-									>
-										Route Started
-									</span>
-								</div>
-								{/* Waypoints Remaining Circle */}
-								<div className="flex flex-col items-center">
-									<div
-										className={`w-7 h-7 ${
-											routeStarted || generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"
-										} rounded-full flex items-center justify-center text-white`}
-									>
-										{routeStarted && waypointsRemaining !== "Arriving Next" && !generatorWaypointCompleted && (
-											<p>{stopsRemaining}</p>
-										)}
-									</div>
-									<span
-										className={`${
-											routeStarted || waypointsRemaining == "Arriving Next" ? "text-blue-500" : "text-gray-700"
-										}`}
-									>
-										{waypointsRemaining}
-									</span>
-								</div>
-								{/* Service Completed Icon */}
-								<div className="flex flex-col items-end ">
-									<div
-										className={`w-7 h-7 ${generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"} rounded-full`}
-									></div>
-									<span className={`${generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}`}>
-										Service Completed
-									</span>
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
+				{TrackingWidgetContent}
 			</div>
 
 			<div className="w-full grid grid-cols-2 gap-5">
