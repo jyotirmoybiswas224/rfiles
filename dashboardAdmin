@@ -1,0 +1,1183 @@
+import { useEffect, useRef, useState } from "react";
+import { CheckCircleIcon, ClockIcon, ArrowRightIcon } from "lucide-react";
+import CalendarWithTimeSlots from "./components/open-calendar/GeneratorCalendarComponent";
+import GeneratorDetailsForm from "./components/GeneratorDetailsForm/GeneratorDetailsForm";
+import GeneratorOfficeHours from "./components/GeneratorOfficeHours/GeneratorOfficeHours";
+import { useGeneratorUser } from "../../../../../../../context/GeneratorUserContext";
+import { useNavigate, useLocation } from "react-router-dom";
+import Loader from "../../../../../../../components/UI/loaders/Loader";
+import {
+	dateFormatter,
+	daysOfWeek,
+	renderAddress,
+	randomizeCoordinates,
+	octoFormatter,
+} from "../../../../../../../utils/helpers";
+import {
+	frequencyPrimaryOptions,
+	frequencySecondaryOptions,
+	scheduledServiceStatus,
+	SERVICE_STATUS,
+	serviceTypes,
+} from "../../../../../../../utils/constants";
+import {
+	collection,
+	doc,
+	getDoc,
+	onSnapshot,
+	orderBy,
+	query,
+	where,
+	getDocs,
+	Timestamp,
+	limit,
+} from "firebase/firestore";
+import { SERVICE_TYPES } from "../../../../../../../utils/constants";
+import { Map } from "@vis.gl/react-google-maps";
+import { getGeneratorById } from "../../../../../../../utils/firebaseOperations";
+import { useParams } from "react-router-dom";
+import { useBreadcrumb } from "../../../../../../../context/BreadcrumbContext";
+import { COLLECTIONS, db } from "../../../../../../../config/firebase";
+import { AzureMapsProvider } from "react-azure-maps";
+import CustomAzureGeneratorDashboardMap from "../../../../../../generator-portal/dashboard/CustomAzureGeneratorDashboardMap";
+import ChildDropdown from "../../../../../../generator-portal/dashboard/components/dropDowns/childDropdown";
+import ParentDropdown from "../../../../../../generator-portal/dashboard/components/dropDowns/parentDropdown";
+import { endOfMonth, startOfMonth } from "date-fns";
+
+const DASHBOARD = "generator-dashboard";
+const PROFILE = "generator-profile";
+const CONTACTS = "generator-contacts";
+const NOTES = "service-notes";
+const ROUTES = "routes";
+const GEN_HOME_ROUTE = "/admin/generators";
+const SERVICE_CALENDAR = "service-calendar";
+
+const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
+	const { user, authLoading } = useGeneratorUser();
+	const [allServices, setAllServices] = useState({});
+	const navigate = useNavigate();
+	const [nextService, setNextService] = useState(null);
+	const [lastCompleted, setLastCompleted] = useState(null);
+	const contactFormRef = useRef();
+	const { id: genId } = useParams();
+	const [todayService, setTodayService] = useState({});
+	const location = useLocation();
+	const [isLoading, setIsLoading] = useState(true);
+	const [updateWidget, setUpdateWidget] = useState(null);
+	const [error, setError] = useState("");
+	const [routeStarted, setRouteStarted] = useState(null);
+	const [progressBar, setProgressbar] = useState("0%");
+	const formName = location.pathname.split("/").pop();
+	const { handleSetBreadcrumb, handleStepCompletion } = useBreadcrumb();
+	const [waypointsRemaining, setWaypointsRemaining] = useState("Stops Remaining");
+	const [completed, setCompleted] = useState(false);
+	const [generatorWaypointCompleted, setGeneratorWaypointCompleted] = useState(false);
+	const [sameParentGenerators, setSameParentGenerators] = useState(null);
+	const [parentGenerator, setParentGenerator] = useState(null);
+	const [stopsRemaining, setStopsRemaining] = useState(0);
+	const [value, setValue] = useState("");
+	const [serviceFrequency, setServiceFrequency] = useState("");
+	const [isparent, setIsParent] = useState(null);
+	const [parentData, setParentData] = useState({});
+	const [randomCoordinates, setRandomCoordinates] = useState({ lat: 33.0181007, lng: 117.0809945 });
+	const [tdUTC, setTodayUTC] = useState(null);
+	const [allServiceFrequencies, setAllServiceFrequencies] = useState([
+		...frequencyPrimaryOptions,
+		...frequencySecondaryOptions,
+	]);
+	const [serviceCompletionText, setServiceCompletionText] = useState("");
+	const [todayStartedRoute, setTodayStartedRoute] = useState();
+	const [delay, setDelay] = useState(0);
+
+	useEffect(() => {
+		if (!generatorData?.id) return;
+		const q = query(collection(db, COLLECTIONS.serviceSchedules), where("generatorId", "==", generatorData.id));
+		const unsubscribe = onSnapshot(q, async (snap) => {
+			try {
+				console.log("Snapshot received:", snap);
+				const tempSchedules = await Promise.all(
+					snap.docs.map(async (el) => {
+						if (!el.exists()) return null;
+
+						const data = { ...el.data(), id: el.id };
+						if (Array.isArray(data.serviceType)) {
+							data.serviceType = data.serviceType[0];
+						}
+						if (data.isDeleted) return null;
+						let createdAt = null;
+						if (data.createdAt?.seconds || data.createdAt?.nanoseconds) {
+							createdAt = new Timestamp(data.createdAt.seconds, data.createdAt.nanoseconds).toDate();
+						} else if (data.createdAt?.toDate) {
+							createdAt = data.createdAt.toDate();
+						} else {
+							createdAt = new Date();
+						}
+
+						return { ...data, createdAt };
+					})
+				);
+				const filteredSchedules = tempSchedules.filter(Boolean);
+				filteredSchedules.sort((a, b) => a.createdAt - b.createdAt);
+
+				const formattedServiceTypes = [...new Set(filteredSchedules.map((item) => item.serviceType))]
+					.map((service) => {
+						const matchedService = serviceTypes.find((type) => type.value === service);
+						return matchedService ? matchedService.label : service;
+					})
+					.join(", ");
+
+				console.log(formattedServiceTypes);
+				const uniqueServiceTypes = [
+					...new Set(
+						filteredSchedules.map((item) => {
+							const type = item.serviceFrequency?.type;
+							return type;
+						})
+					),
+				];
+				uniqueServiceTypes.filter(Boolean);
+				setValue(formattedServiceTypes);
+				setServiceFrequency(uniqueServiceTypes);
+				console.log("Final schedules:", filteredSchedules);
+			} catch (error) {
+				console.error("Error processing snapshot:", error);
+			}
+		});
+		return () => {
+			console.log("Unsubscribing from snapshot listener");
+			unsubscribe();
+		};
+	}, [generatorData?.id]);
+
+	useEffect(() => {
+		if (![DASHBOARD, PROFILE, CONTACTS, NOTES, ROUTES].includes(formName)) {
+			return navigate(`${GEN_HOME_ROUTE}/${genId}/${DASHBOARD}`);
+		}
+	}, [location.pathname]);
+
+	useEffect(() => {
+		if (!genId && !generatorData) return;
+		if (parentData.parentAccount) {
+			setIsParent(false);
+		} else {
+			setIsParent(true);
+		}
+	}, [generatorData.parentAccount, genId, parentData]);
+
+	useEffect(() => {
+		console.log({ generatorData });
+		if (!generatorData) return;
+		if (
+			generatorData?.serviceAddCoordinates &&
+			generatorData.serviceAddCoordinates?.lat &&
+			generatorData.serviceAddCoordinates?.lng
+		) {
+			setRandomCoordinates(
+				randomizeCoordinates(generatorData.serviceAddCoordinates?.lat, generatorData.serviceAddCoordinates?.lng)
+			);
+		}
+
+		return () => {};
+	}, [generatorData]);
+
+	useEffect(() => {
+		const fetchDataOfGenerator = async () => {
+			const data = await getGeneratorById(genId);
+			if (!data) setError("Generator not found");
+			else {
+				setParentData(data);
+				handleSetBreadcrumb("generator-dashboard", data?.octoNumber?.dashboardCompleted);
+				handleStepCompletion("Generator Profile", data?.onboardingStatus?.profileCompleted);
+				handleStepCompletion("Generator Contacts", data?.onboardingStatus?.contactsCompleted);
+				handleStepCompletion("Service Notes", data?.onboardingStatus?.serviceNotesCompleted);
+				handleStepCompletion("Routes", data?.onboardingStatus?.routesCompleted);
+				handleStepCompletion("Service Calendar", true);
+			}
+			setIsLoading(false);
+		};
+
+		if (genId) {
+			fetchDataOfGenerator(genId);
+			// dispatch(fetchGenerator());
+		}
+	}, [genId, navigate]);
+
+	useEffect(() => {
+		if (!generatorData?.id) return; 
+		const currentDate = new Date();  
+		const currentYear = currentDate.getFullYear();  
+		const startOfYear = new Date(Date.UTC(currentYear, 0, 1, 0, 0, 0, 0)); 
+		const endOfYear = new Date(Date.UTC(currentYear, 11, 31, 23, 59, 59, 999));
+		const unsubscribe = onSnapshot(
+			query(
+				collection(db, COLLECTIONS.scheduledServices),
+				where("generatorId", "==", generatorData.id),
+				where("status", "not-in", ["DELETED", "CANCELLED"]),
+				where("date", ">=", Timestamp.fromDate(startOfYear)),
+				where("date", "<=", Timestamp.fromDate(endOfYear)),
+				orderBy("date", "asc")
+			),
+			async (snap) => {
+				try {
+					console.log("Snapshot received:", snap);
+					const tempServices = [];
+					const jobs = snap.docs.map(async (el) => {
+						if (el.exists()) {
+							const serviceData = el.data();
+							const scheduleRes = await getDoc(doc(db, COLLECTIONS.serviceSchedules, serviceData.serviceScheduleId));
+							if (scheduleRes.exists()) {
+								serviceData.scheduleData = { ...scheduleRes.data(), id: scheduleRes.id };
+							}
+							tempServices.push({ ...serviceData, id: el.id });
+						}
+					});
+					await Promise.all(jobs);
+					console.log("tempService", tempServices);
+					setAllServices(tempServices);
+				} catch (error) {
+					console.error("Error processing snapshot:", error);
+				}
+			}
+		);
+
+		return () => {
+			console.log("Unsubscribing from snapshot listener");
+			unsubscribe();
+		};
+	}, [generatorData?.id]);
+
+	const [childrenData, setChildrenData] = useState([]);
+
+	useEffect(() => {
+		if (!generatorData?.id) return;
+
+		const unsubscribe = onSnapshot(
+			query(collection(db, COLLECTIONS.generators), where("parentAccount", "==", genId)),
+			async (snap) => {
+				try {
+					const data = snap.docs.map((doc) => doc.data());
+					setChildrenData(data);
+				} catch (error) {
+					console.error("Error processing snapshot:", error);
+				}
+			}
+		);
+		if (generatorData.parentAccount) {
+			const unsubscribe2 = onSnapshot(
+				query(collection(db, COLLECTIONS.generators), where("parentAccount", "==", generatorData.parentAccount)),
+				async (snap) => {
+					try {
+						const data = snap.docs.map((doc) => doc.data());
+						setSameParentGenerators(data);
+					} catch (error) {
+						console.error("Error processing snapshot:", error);
+					}
+				}
+			);
+
+			const unsubscribe3 = onSnapshot(
+				query(collection(db, COLLECTIONS.generators), where("id", "==", generatorData.parentAccount)),
+				async (snap) => {
+					try {
+						const data = snap.docs.map((doc) => doc.data());
+						setParentGenerator(data);
+						console.log("psrentgen", data);
+					} catch (error) {
+						console.error("Error processing snapshot:", error);
+					}
+				}
+			);
+			return () => {
+				console.log("Unsubscribing from snapshot listener");
+				unsubscribe();
+				unsubscribe2();
+				unsubscribe3();
+			};
+		}
+	}, [generatorData?.id, generatorData?.parentAccount]);
+
+	useEffect(() => {
+		if (!allServices?.length) return;
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+
+		const filteredDate = allServices?.filter((el) => {
+			const serviceDate = el.date.toDate();
+			return serviceDate.getTime() >= today.getTime();
+		});
+
+		const filteredCompleted = allServices?.filter((el) => el.status === "COMPLETE");
+		if (filteredCompleted) {
+			console.log("completed service", filteredCompleted, "yguyg", filteredCompleted[filteredCompleted.length - 1]);
+
+			//setLastCompleted(filteredCompleted[filteredCompleted.length - 1]);
+		} else {
+			//setLastCompleted(null);
+		}
+		setCompleted(false);
+		if (filteredDate.length) {
+			//	setNextService(filteredDate[0]);
+		}
+	}, [allServices]);
+
+	const fetchAvailableServices = async (snap) => {
+		try {
+			//setIsLoadingServices(true);
+			await new Promise((resolve) => setTimeout(resolve, delay));
+			//setDelay(5000);
+			let tempServices = [];
+			const jobs = snap.docs.map(async (el) => {
+				if (el.exists()) {
+					const data = { ...el.data(), id: el.id };
+					if (data?.routeId?.length > 0) {
+						const routeRes = await getDoc(doc(db, COLLECTIONS.routes, data.routeId));
+						if (routeRes.exists()) {
+							data.routeData = { ...routeRes.data(), id: routeRes.id };
+						}
+					}
+					if (data?.serviceScheduleId?.length > 0) {
+						const serviceScheduleRes = await getDoc(doc(db, COLLECTIONS.serviceSchedules, data.serviceScheduleId));
+						if (serviceScheduleRes.exists()) {
+							data.serviceScheduleData = { ...serviceScheduleRes.data(), id: serviceScheduleRes.id };
+						}
+					}
+					tempServices.push(data);
+				}
+			});
+			await Promise.all(jobs);
+			tempServices = tempServices.filter(
+				(el) => el.status !== SERVICE_STATUS.DELETED && el.status !== SERVICE_STATUS.CANCELLED
+			);
+			const today = new Date();
+			const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+			setNextService(
+				tempServices
+					.filter((el) => {
+						if (
+							el.date.toDate() >= todayUTC &&
+							el.status !== SERVICE_STATUS.COMPLETE &&
+							el.status !== SERVICE_STATUS.CANCELLED
+						) {
+							return true;
+						} else {
+							return false;
+						}
+					})
+					.sort((a, b) => a.date.toDate() - b.date.toDate())
+			);
+			setLastCompleted([
+				...tempServices
+					.filter((el) => el.status === SERVICE_STATUS.COMPLETE)
+					.sort((a, b) => b.date.toDate() - a.date.toDate()),
+			]);
+
+			setTodayService(
+				tempServices
+					.filter((el) => {
+						const serviceDate = el.date.toDate();
+						return (
+							serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
+							serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
+							serviceDate.getUTCDate() === todayUTC.getUTCDate()
+						);
+					})
+					.sort((a, b) => a.date.toDate() - b.date.toDate())
+			);
+			console.log("tempServ",tempServices);
+			
+		} catch (error) {
+			console.log(error);
+		} finally {
+			//setIsLoadingServices(false);
+		}
+	};
+
+	const nextServiceDateString = todayService?.[0]?.date ? todayService[0].date.toDate().toISOString() : null;
+	const startDate = new Date();
+	const endDate = new Date();
+	endDate.setDate(startDate.getDate() + 30);
+
+	useEffect(() => {
+		if (!generatorData) return;
+
+		const unsubscribers = [];
+		const date = new Date();
+		const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
+		const timestampId = todayUTC.toISOString();
+		console.log("timeStampId", timestampId);
+
+		const servicesUnsubscribe = onSnapshot(
+			query(
+				collection(db, COLLECTIONS.scheduledServices),
+				where("generatorId", "==", generatorData.id),
+				where("status","not-in",[SERVICE_STATUS.CANCELLED,SERVICE_STATUS.DELETED]),
+				where("date", ">=", Timestamp.fromDate(startDate)),
+				where("date", "<=", Timestamp.fromDate(endDate)),
+				orderBy("date", "asc"),
+				
+			),
+			async (snap) => {
+				fetchAvailableServices(snap);
+
+				if (todayService.length === 0) return;
+
+				const generatorRoutesForDay = [...new Set(todayService.map((service) => service.routeId))];
+				console.log("Routes for today:", generatorRoutesForDay, todayService);
+
+				const routesStatusTracker = {};
+
+				const processRoutes = async () => {
+					let startedRoutes = [];
+					let anyRouteStarted = false;
+					let selectedService = null;
+
+					await Promise.all(
+						generatorRoutesForDay.map(async (routeId) => {
+							const routeRef = doc(db, COLLECTIONS.routes, routeId);
+							const dailyRouteRef = doc(routeRef, "dailyRoutes", timestampId);
+
+							try {
+								const dailyRouteSnapshot = await getDoc(dailyRouteRef);
+
+								if (!dailyRouteSnapshot.exists()) {
+									routesStatusTracker[routeId] = { started: false, completed: false };
+									return;
+								}
+
+								const routeData = dailyRouteSnapshot.data();
+
+								const isRouteStarted = !!(routeData.assignedDriverId && routeData.assignedServiceVehicleId);
+
+								routesStatusTracker[routeId] = {
+									started: isRouteStarted,
+									completed: false,
+									data: routeData,
+								};
+
+								if (isRouteStarted) {
+									const relatedServices = todayService.filter((s) => s.routeId === routeId);
+
+									for (const service of relatedServices) {
+										try {
+											const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, service.id));
+
+											if (serviceDoc.exists()) {
+												const serviceData = serviceDoc.data();
+
+												if (serviceData.status === "PENDING" || serviceData.status === "INPROGRESS") {
+													startedRoutes.push(service);
+													anyRouteStarted = true;
+													break;
+												}
+											}
+										} catch (error) {
+											console.error(`Error checking service status for ${service.id}:`, error);
+										}
+									}
+								}
+							} catch (error) {
+								console.error(`Error getting route data for ${routeId}:`, error);
+							}
+						})
+					);
+
+					setRouteStarted(anyRouteStarted);
+
+					if (todayStartedRoute) {
+						try {
+							const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, todayStartedRoute.id));
+							if (
+								serviceDoc.exists() &&
+								(serviceDoc.data().status === "PENDING" || serviceDoc.data().status === "INPROGRESS")
+							) {
+								selectedService = todayStartedRoute;
+							}
+						} catch (error) {
+							console.error("Error checking todayStartedRoute status:", error);
+						}
+					}
+
+					if (!selectedService && startedRoutes.length > 0) {
+						selectedService = startedRoutes[0];
+					} else if (!selectedService && todayService.length > 0) {
+						for (const service of todayService) {
+							try {
+								const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, service.id));
+								if (
+									serviceDoc.exists() &&
+									(serviceDoc.data().status === "PENDING" || serviceDoc.data().status === "INPROGRESS")
+								) {
+									selectedService = service;
+									break;
+								}
+							} catch (error) {
+								console.error(`Error checking service status`, error);
+							}
+						}
+
+						if (!selectedService && todayService.length > 0) {
+							selectedService = todayService[0];
+							console.log("No PENDING ");
+						}
+					}
+
+					if (selectedService) {
+						setTodayStartedRoute(selectedService);
+						setUpdateWidget(selectedService);
+
+						const selectedRouteRef = doc(db, COLLECTIONS.routes, selectedService.routeId);
+						const selectedDailyRouteRef = doc(selectedRouteRef, "dailyRoutes", timestampId);
+
+						const dailyRouteUnsubscribe = onSnapshot(selectedDailyRouteRef, async (dailyRouteSnapshot) => {
+							if (!dailyRouteSnapshot.exists()) return;
+
+							const routeData = dailyRouteSnapshot.data();
+							await processSelectedRouteData(selectedService, routeData, generatorRoutesForDay);
+
+							try {
+								const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, selectedService.id));
+								if (serviceDoc.exists() && serviceDoc.data().status === "COMPLETE") {
+									console.log("Selected service is now COMPLETE, finding next service to track");
+									await processRoutes();
+								}
+							} catch (error) {
+								console.error("Error checking if selected service is still valid:", error);
+							}
+						});
+
+						unsubscribers.push(dailyRouteUnsubscribe);
+					} else {
+						setRouteStarted(false);
+					}
+				};
+
+				await processRoutes();
+			}
+		);
+
+		unsubscribers.push(servicesUnsubscribe);
+
+		return () => {
+			unsubscribers.forEach((unsub) => unsub());
+		};
+	}, [generatorData, generatorWaypointCompleted, nextServiceDateString, serviceCompletionText]);
+
+	async function processSelectedRouteData(selectedService, routeData, generatorRoutesForDay) {
+		if (!selectedService || !routeData) return;
+
+		const date = new Date();
+		const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
+		const timestampId = todayUTC.toISOString();
+
+		let generatorWaypointIndex = -1;
+		let inProgressIndex = -1;
+		let firstOccurrenceIndex = -1;
+
+		// Find relevant waypoint
+		const waypointPromises = routeData.waypoints.map(async (waypoint, index) => {
+			if (waypoint.id === generatorData.id) {
+				try {
+					const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+					if (!serviceDoc.exists()) return;
+
+					const serviceData = serviceDoc.data();
+					if (!serviceData) return;
+
+					if (firstOccurrenceIndex === -1) {
+						firstOccurrenceIndex = index;
+					}
+					if (serviceData.status === "INPROGRESS") {
+						inProgressIndex = index;
+					}
+					if (serviceData.status === "PENDING" && generatorWaypointIndex === -1) {
+						generatorWaypointIndex = index;
+					}
+				} catch (error) {
+					console.error(`Error getting service data:`, error);
+				}
+			}
+		});
+
+		await Promise.all(waypointPromises);
+
+		if (inProgressIndex !== -1) {
+			generatorWaypointIndex = inProgressIndex;
+		} else if (generatorWaypointIndex === -1) {
+			generatorWaypointIndex = firstOccurrenceIndex;
+		}
+
+		if (generatorWaypointIndex === -1) return;
+
+		// Calculate route progress and service status
+		const serviceIds = routeData.waypoints
+			.slice(0, generatorWaypointIndex + 1)
+			.map((waypoint) => waypoint.serviceId)
+			.filter((id) => id);
+
+		let pendingCount = 0;
+		let curentGenStatus = null;
+
+		try {
+			await Promise.all(
+				serviceIds.map(async (serviceId) => {
+					const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, serviceId));
+					if (!serviceDoc.exists()) return;
+
+					const serviceData = serviceDoc.data();
+					if (serviceData?.status === "PENDING") {
+						pendingCount++;
+					}
+
+					if (serviceId === routeData.waypoints[generatorWaypointIndex].serviceId) {
+						curentGenStatus = serviceDoc;
+					}
+				})
+			);
+
+			if (!curentGenStatus) {
+				curentGenStatus = await getDoc(
+					doc(db, COLLECTIONS.scheduledServices, routeData.waypoints[generatorWaypointIndex].serviceId)
+				);
+			}
+
+			const progress =
+				firstOccurrenceIndex > 0
+					? ((generatorWaypointIndex + 1 - pendingCount) / (generatorWaypointIndex + 1)) * 100
+					: 0;
+
+			if (
+				curentGenStatus.data().status === "INPROGRESS" ||
+				pendingCount === 0 ||
+				waypointsRemaining === "Arriving Next"
+			) {
+				setProgressbar(90);
+			} else {
+				setProgressbar(progress === 100 || waypointsRemaining === "Arriving Next" ? 90 : progress);
+			}
+
+			setStopsRemaining(pendingCount);
+			setWaypointsRemaining(
+				pendingCount === 0 ||
+					curentGenStatus.data().status === "INPROGRESS" ||
+					generatorWaypointIndex !== firstOccurrenceIndex
+					? "Arriving Next"
+					: "Stops Remaining"
+			);
+			console.log(
+				"progr",
+				progress,
+				pendingCount,
+				firstOccurrenceIndex,
+				generatorWaypointIndex,
+				curentGenStatus.data().status,
+				generatorWaypointCompleted
+			);
+
+			const currentServiceId = routeData.waypoints[generatorWaypointIndex].serviceId;
+
+			await calculateServiceCompletionStats(generatorData.id, timestampId, generatorRoutesForDay);
+		} catch (error) {
+			console.error("Error processing route data:", error);
+		}
+	}
+
+	async function calculateServiceCompletionStats(generatorId, timestampId, generatorRoutesForDay) {
+		let totalServicesCount = 0;
+		let completedServicesCount = 0;
+
+		try {
+			const todayStart = new Date(timestampId);
+			const todayEnd = new Date(todayStart);
+			todayEnd.setHours(23, 59, 59, 999);
+
+			const todayStartTimestamp = Timestamp.fromDate(todayStart);
+			const todayEndTimestamp = Timestamp.fromDate(todayEnd);
+
+			const servicesQuery = query(
+				collection(db, COLLECTIONS.scheduledServices),
+				where("generatorId", "==", generatorId),
+				where("date", ">=", todayStartTimestamp),
+				where("date", "<=", todayEndTimestamp),
+				where("status", "not-in", ["DELETED", "CANCELLED"])
+			);
+
+			const servicesSnapshot = await getDocs(servicesQuery);
+
+			// This gives us the total count of services for today
+			totalServicesCount = servicesSnapshot.docs.length;
+
+			completedServicesCount = servicesSnapshot.docs.filter(
+				(doc) => doc.data().status === SERVICE_STATUS.COMPLETE
+			).length;
+
+			if (totalServicesCount === 0) {
+				await Promise.all(
+					generatorRoutesForDay.map(async (routeId) => {
+						const routeDocRef = doc(db, COLLECTIONS.routes, routeId);
+						const dailyRouteRef = doc(routeDocRef, "dailyRoutes", timestampId);
+
+						try {
+							const dailyRouteData = await getDoc(dailyRouteRef);
+
+							if (!dailyRouteData.exists()) return;
+
+							const routeWaypoints = dailyRouteData.data().waypoints || [];
+							// Look for ALL waypoints for this generator
+							const generatorWaypoints = routeWaypoints.filter((wp) => wp.id === generatorId);
+
+							totalServicesCount += generatorWaypoints.length;
+
+							// Check each service's status
+							await Promise.all(
+								generatorWaypoints.map(async (waypoint) => {
+									try {
+										const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+										if (serviceDoc.exists() && serviceDoc.data().status === SERVICE_STATUS.COMPLETE) {
+											completedServicesCount++;
+										}
+									} catch (error) {
+										console.error("Error checking service status:", error);
+									}
+								})
+							);
+						} catch (error) {
+							console.error(`Error getting daily route data for ${routeId}:`, error);
+						}
+					})
+				);
+			}
+
+			console.log(`Services found: ${totalServicesCount} total, ${completedServicesCount} completed`);
+
+			setServiceCompletionText(`${completedServicesCount} of ${totalServicesCount}`);
+			// Check if all routes are complete
+			const allComplete = completedServicesCount === totalServicesCount && totalServicesCount > 0;
+			setGeneratorWaypointCompleted(allComplete);
+
+			return {
+				total: totalServicesCount,
+				completed: completedServicesCount,
+				allComplete,
+			};
+		} catch (error) {
+			console.error("Error calculating service completion stats:", error);
+			return { total: 0, completed: 0, allComplete: false };
+		}
+	}
+	const [selectedValue, setSelectedValue] = useState("");
+	const [size, setSize] = useState(1);
+
+	useEffect(() => {
+		if (childrenData && childrenData.length > 0 && !generatorData.parentAccount) {
+			setSelectedValue("");
+		} else {
+			setSelectedValue(generatorData?.id || "");
+		}
+	}, [generatorData, childrenData]);
+
+	const handleSelectChange = async (event) => {
+		const selectedId = event.target.value;
+		if (selectedId) {
+			const gendata = await getGeneratorById(selectedId);
+			//console.log("checks",selectedId,generatorData,childrenData,childrenData.filter((child)=>child.id==selectedId));
+			setGeneratorData(gendata);
+		}
+	};
+	const handleChildChange = (event) => {
+		const id = event.target.value;
+		if (id) {
+			navigate(`/admin/generators/${id}/generator-dashboard`);
+			setSize(1);
+		}
+	};
+	function formatUtcDateString(utcDateString) {
+		const date = new Date(utcDateString);
+		const formatter = new Intl.DateTimeFormat("en-US", {
+			weekday: "short",
+			month: "2-digit",
+			day: "2-digit",
+			year: "numeric",
+			timeZone: "UTC",
+		});
+
+		return formatter.format(date);
+	}
+
+	const renderWorkHours = () => {
+		if (!generatorData?.workingHours) return "N/A";
+
+		if (nextService?.length > 0 && nextService[0]?.date) {
+			const serviceDate = nextService[0].date?.toDate?.();
+			if (!serviceDate) return "N/A"; // Ensure serviceDate is valid
+			const serviceDateUTC = formatUtcDateString(serviceDate.toISOString());
+			const dayOfWeek = daysOfWeek[new Date(serviceDateUTC).getDay()];
+			const todaysWorkHours = generatorData.workingHours?.[dayOfWeek];
+
+			if (!todaysWorkHours) return "N/A";
+
+			console.log("todayWH", todaysWorkHours, dayOfWeek);
+
+			return todaysWorkHours.closed ? "Closed" : `${todaysWorkHours.open ?? "N/A"} - ${todaysWorkHours.close ?? "N/A"}`;
+		}
+
+		return "N/A";
+	};
+
+	const isParentWithChildren = isparent && childrenData && childrenData.length > 0;
+	return (
+		<div className="bg-bgDefaultColor px-32 py-5 flex flex-col gap-5">
+			<div className="grid grid-cols-3 gap-5 items-center  ">
+				<ParentDropdown
+					isParent={isparent}
+					generatorData={generatorData}
+					parentGenerator={parentGenerator}
+					handleChildChange={handleChildChange}
+				/>
+
+				<ChildDropdown
+					selectedValue={selectedValue}
+					setSelectedValue={setSelectedValue}
+					isParentWithChildren={isParentWithChildren}
+					isparent={isparent}
+					generatorData={generatorData}
+					parentGenerator={parentGenerator}
+					childrenData={childrenData}
+					sameParentGenerators={sameParentGenerators}
+					getGeneratorById={getGeneratorById}
+					setGeneratorData={setGeneratorData}
+				/>
+
+				{/* <button className="bg-lightBlue hover:bg-cardTextBlue text-white rounded-full py-3 px-4 shadow-lg transition-all duration-300 flex justify-between items-center space-x-2">
+					<span>Add Service Location</span>
+					<span>
+						<Plus />
+					</span>
+				</button> */}
+			</div>
+
+			<div className="bg-white w-full rounded-xl flex flex-col items-start justify-evenly p-5 shadow-sm">
+				<p className="font-semibold">{generatorData?.generatorName}</p>
+				<p className="font-semibold">{octoFormatter(generatorData?.octoNumber)}</p>
+				<p className="font-semibold">{renderAddress(generatorData?.serviceAddress)}</p>
+			</div>
+
+			<div className="flex justify-between gap-5">
+				<div className="bg-white p-10 flex items-center gap-5 flex-col w-full text-center rounded-xl shadow-md">
+					<h1 className="font-bold text-3xl">Service</h1>
+
+					<div className="">
+						<h2 className="font-semibold text-lg">Next Service</h2>
+						<h1 className="text-[#4CD964] text-xl">
+							{nextService?.length > 0 && nextService[0]?.date
+								? formatUtcDateString(nextService[0].date.toDate())
+								: "N/A"}
+						</h1>
+					</div>
+
+					<div className="grid gap-2 w-full max-w-80">
+						<button
+							className="w-full  bg-thatblue hover:bg-blue-500 rounded-full text-white p-3"
+							onClick={() => {
+								navigate(`/admin/generators/${generatorData?.id}/routes?section=history`);
+							}}
+						>
+							Manage Service History
+						</button>
+						<button
+							className="w-full  bg-white hover:bg-[#DEDEDE] rounded-full text-[#666666] border border-[#DEDEDE] p-3"
+							onClick={() => {
+								navigate(`/admin/generators/${generatorData?.id}/routes`);
+							}}
+						>
+							Manage Future Services
+						</button>
+					</div>
+
+					<div className="w-full bg-thatblue text-white  rounded-xl p-5 grid  gap-2">
+						<h1 className="font-semibold text-center">Service Summary</h1>
+						<hr className="" />
+
+						<div className="grid gap-1">
+							<div className="grid grid-cols-2">
+								<span className="text-left">Service Address:</span>
+								<span className="text-left">{renderAddress(generatorData?.serviceAddress)}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Next Service:</span>
+
+								<span className="text-left">
+									{nextService?.length > 0 && nextService[0]?.date
+										? formatUtcDateString(nextService[0].date.toDate())
+										: "N/A"}
+								</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Office Hours:</span>
+								<span className="text-left">{renderWorkHours() ? renderWorkHours() : "N/A"}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Service Type:</span>
+								<span className="text-left">{value ? value : "N/A"}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Last Completed Service:</span>
+								<span className="text-left">
+									{lastCompleted?.[0]?.completedAt
+										? formatUtcDateString(lastCompleted[0].completedAt.toDate?.() ?? new Date())
+										: "N/A"}
+								</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Service Frequency:</span>
+								<span className="text-left">
+									{console.log("serviceFrequency", serviceFrequency)}
+									{serviceFrequency?.length > 0
+										? serviceFrequency
+												.map((service) => allServiceFrequencies.find((el) => el.value === service)?.label ?? "N/A")
+												.join(", ")
+										: "N/A"}
+								</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<div className="bg-white p-10 flex items-center gap-5 flex-col w-full text-center rounded-xl shadow-md">
+					<h1 className="font-bold text-3xl">Billing</h1>
+
+					<div className="">
+						<h2 className="font-semibold text-lg">Open balance</h2>
+						<h1 className="text-[#4CD964] text-xl">${dummyBillingData.openBalance}</h1>
+					</div>
+
+					<div className="grid gap-2 w-full max-w-80">
+						<button
+							className="w-full p-3 bg-thatblue hover:bg-blue-500 rounded-full text-white"
+							onClick={() => {
+								//navigate("/generator-dashboard/invoices-and-payments");
+								navigate(`/admin/generators/${generatorData?.id}/invoices-and-payments`);
+							}}
+						>
+							Manage Invoices
+						</button>
+						<button
+							className="w-full p-3 bg-white hover:bg-[#DEDEDE] rounded-full text-[#666666] border border-[#DEDEDE]"
+							onClick={() => {
+								//navigate("/generator-dashboard/saved-payment-methods");
+								navigate(`/admin/generators/${generatorData?.id}/saved-payment-methods`);
+							}}
+						>
+							Manage Payment Options
+						</button>
+					</div>
+
+					<div className="w-full bg-thatblue text-white  rounded-xl p-5 grid  gap-2">
+						<h1 className="font-semibold text-center">Billing Summary</h1>
+
+						<hr />
+
+						<div className="grid gap-1">
+							<div className="grid grid-cols-2">
+								<span className="text-left">Billing Address:</span>
+								<span className="text-left">{renderAddress(generatorData?.billingAddress)}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Last Payment:</span>
+								<span className="text-left">{dummyBillingData?.lastPayment}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Overdue Balance:</span>
+								<span className="text-left">{dummyBillingData.overdueBalance}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Unpaid Invoices:</span>
+								<span className="text-left">{dummyBillingData.unpaidInvoices}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Billing Frequency:</span>
+								<span className="text-left">{dummyBillingData.billingFrequency}</span>
+							</div>
+							<div className="grid grid-cols-2">
+								<span className="text-left">Payment Type</span>
+								<span className="text-left">{dummyBillingData.paymentType}</span>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div className="w-full grid grid-cols-2 gap-5 ">
+				<div className="bg-white rounded-cardRadii shadow-md p-5 grid grid-cols-1 gap-2">
+					<h2 className="text-lg font-bold text-left">Upcoming Service Schedules</h2>
+					<div className="grid grid-cols-3 gap-2">
+						<div className="grid grid-cols-8 items-center">
+							<div className="w-6 h-6 border-red-500 bg-white border-[3px] rounded-none mr-2 col-span-2" />
+							<span className="text-gray-700 col-span-6">Today's Date</span>
+						</div>
+						<div className="grid grid-cols-8 items-center">
+							<div className="w-6 h-6 bg-red-500 rounded-full mr-2 col-span-2" />
+							<span className="text-gray-700 col-span-6">Medical Waste</span>
+						</div>
+						<div className="grid grid-cols-8 items-center">
+							<div className="w-6 h-6 bg-green-500 rounded-full mr-2 col-span-2" />
+							<span className="text-gray-700 col-span-6">Paper Shredding Schedule</span>
+						</div>
+						<div className="grid grid-cols-8 items-center">
+							<div className="flex w-6 h-6 col-span-2">
+								<div className="w-3 h-6 bg-green-500 rounded-r-full rotate-180"></div>
+								<div className="w-3 h-6 bg-red-500 rounded-l-full rotate-180"></div>
+							</div>
+							<span className="text-gray-700 col-span-6">Medical Waste & Paper Shredding</span>
+						</div>
+						<div className="grid grid-cols-8 items-center">
+							<div className="w-6 h-6 bg-yellow-500 rounded-full mr-2 col-span-2" />
+							<span className="text-gray-700 col-span-6">Holiday (No services on this day)</span>
+						</div>
+						<div className="grid grid-cols-8 items-center">
+							<div className="w-6 h-6 bg-gray-500 rounded-full mr-2 col-span-2" />
+							<span className="text-gray-700 col-span-6">Completed (Past) Service dates</span>
+						</div>
+						<div className="grid grid-cols-8 items-center">
+							<div className="w-6 h-6 col-span-2 rounded-full bg-white border border-gray-500 mr-2" />
+							<span className="text-gray-700 col-span-6">Unlogged (Past) Service dates</span>
+						</div>
+					</div>
+				</div>
+
+				<div className="bg-white rounded-xl shadow-md flex flex-col gap-5 relative p-5 justify-center h-full">
+					<div className="absolute top-0 right-0 text-sm">
+						<p className="p-5">{serviceCompletionText}</p>
+					</div>
+					<div>
+						<h2 className="text-lg font-bold text-left">Live Track</h2>
+					</div>
+					<div className="text-lg font-bold h-1/2 mt-auto flex items-end">
+						{todayService?.[0]?.date &&
+						nextService?.[0]?.date &&
+						formatUtcDateString(todayService[0].date.toDate()) === formatUtcDateString(nextService[0].date.toDate())
+							? "Tracking "
+							: "Check Back On: "}
+						(
+						{nextService?.[0]?.date && nextService[0].date.toDate() instanceof Date
+							? formatUtcDateString(nextService[0].date.toDate())
+							: "N/A"}
+						)
+					</div>
+
+					<div className="h-1/2">
+						<div className="relative w-full bg-gray-200 rounded-full h-3 ">
+							<div
+								className={`${!completed ? "bg-blue-500" : "bg-green-500"} h-3 rounded-full`}
+								style={{
+									width: generatorWaypointCompleted
+										? "100%"
+										: waypointsRemaining === "Arriving Next"
+										? "90%"
+										: routeStarted
+										? `${progressBar}%`
+										: "0%",
+								}}
+							/>
+							<div className="flex justify-between items-center absolute w-full top-4 -translate-y-1/2">
+								{/* Route Started Icon */}
+								<div className="flex flex-col ">
+									<CheckCircleIcon
+										className={`w-7 h-7 ${
+											routeStarted || generatorWaypointCompleted
+												? "bg-blue-500 text-white"
+												: "text-gray-300 bg-gray-200"
+										} rounded-full `}
+									/>
+									<span
+										className={`${routeStarted || generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}  `}
+									>
+										Route Started
+									</span>
+								</div>
+								{/* Waypoints Remaining Circle */}
+								<div className="flex flex-col items-center">
+									<div
+										className={`w-7 h-7 ${
+											routeStarted || generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"
+										} rounded-full flex items-center justify-center text-white`}
+									>
+										{routeStarted && waypointsRemaining !== "Arriving Next" && !generatorWaypointCompleted && (
+											<p>{stopsRemaining}</p>
+										)}
+									</div>
+									<span
+										className={`${
+											routeStarted || waypointsRemaining == "Arriving Next" ? "text-blue-500" : "text-gray-700"
+										}`}
+									>
+										{waypointsRemaining}
+									</span>
+								</div>
+								{/* Service Completed Icon */}
+								<div className="flex flex-col items-end ">
+									<div
+										className={`w-7 h-7 ${generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"} rounded-full`}
+									></div>
+									<span className={`${generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}`}>
+										Service Completed
+									</span>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div className="w-full grid grid-cols-2 gap-5">
+				<div className="bg-white p-3 rounded-cardRadii shadow-md flex-1 flex flex-col">
+					<h2 className="font-bold text-lg ml-1 pb-2">Service Calendar</h2>
+					<CalendarWithTimeSlots allServices={allServices} wholeCalender={true} startDate={new Date()} />
+					<p
+						className="text-thatblue text-md py-2 text-end hover:cursor-pointer"
+						onClick={() => {
+							navigate(`/admin/generators/${genId}/service-calendar?child=${generatorData.id}`, {
+								state: { generatorData },
+							});
+						}}
+					>
+						View Service Calendar
+					</p>
+				</div>
+				<div className="shadow-sm w-full  bg-white rounded-xl">
+					<AzureMapsProvider>
+						{generatorData?.serviceAddCoordinates?.lat &&
+						generatorData?.serviceAddCoordinates?.lng &&
+						randomCoordinates?.lat &&
+						randomCoordinates?.lng ? (
+							<CustomAzureGeneratorDashboardMap generatorData={generatorData} randomCoordinates={randomCoordinates} />
+						) : (
+							<p>Generator Data not flow</p>
+						)}
+					</AzureMapsProvider>
+				</div>
+			</div>
+
+			{/*<GeneratorDetailsForm
+				billingAddress={generatorData?.billingAddress}
+				serviceAddress={generatorData?.serviceAddress}
+				name={generatorData?.generatorName}
+				changeRequestHandler={() => {
+					contactFormRef.current.scrollIntoView({ behavior: "smooth" });
+				}}
+			/>*/}
+			<GeneratorOfficeHours workingHours={generatorData?.workingHours} genTimeZone={generatorData?.workingHours?.timeZone} />
+		</div>
+	);
+};
+
+export default GeneratorDashboardAdmin;
+
+const dummyBillingData = {
+	openBalance: "N/A",
+	billingAddress: "N/A",
+	lastPayment: "N/A",
+	overdueBalance: "N/A",
+	unpaidInvoices: "N/A",
+	billingFrequency: "N/A",
+	paymentType: "N/A",
+};
