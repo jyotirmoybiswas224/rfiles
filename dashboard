@@ -265,11 +265,10 @@ useEffect(() => {
 			//	setNextService(filteredDate[0]);
 		}
 	}, [allServices]);
-
 	const fetchAvailableServices = async (snap) => {
 		try {
 			//setIsLoadingServices(true);
-			await new Promise((resolve) => setTimeout(resolve, delay));
+			await new Promise((resolve) => setTimeout(resolve));
 			//setDelay(5000);
 			let tempServices = [];
 			const jobs = snap.docs.map(async (el) => {
@@ -296,13 +295,13 @@ useEffect(() => {
 			);
 			const today = new Date();
 			const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+			console.log("todayUTC",todayUTC);
+			
 			setNextService(
 				tempServices
 					.filter((el) => {
 						if (
-							el.date.toDate() >= todayUTC &&
-							el.status !== SERVICE_STATUS.COMPLETE &&
-							el.status !== SERVICE_STATUS.CANCELLED
+							el.date.toDate() >= todayUTC&&el.status !== SERVICE_STATUS.COMPLETE
 						) {
 							return true;
 						} else {
@@ -317,19 +316,20 @@ useEffect(() => {
 					.sort((a, b) => b.date.toDate() - a.date.toDate()),
 			]);
 
-			setTodayService(
-				tempServices
-					.filter((el) => {
-						const serviceDate = el.date.toDate();
-						return (
-							serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
-							serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
-							serviceDate.getUTCDate() === todayUTC.getUTCDate()
-						);
-					})
-					.sort((a, b) => a.date.toDate() - b.date.toDate())
-			);
-			console.log("tempServ",tempServices);
+			const todayServices = tempServices
+			.filter((el) => {
+			  const serviceDate = el.date.toDate();
+			  return (
+				serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
+				serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
+				serviceDate.getUTCDate() === todayUTC.getUTCDate()
+			  );
+			})
+			.sort((a, b) => a.date.toDate() - b.date.toDate());
+		  
+		  console.log("Today services data:", todayServices); 
+		  setTodayService(todayServices);
+			console.log("tempServ",tempServices,nextService[0]?.date.toDate(),todayService[0]?.date.toDate(),todayService,todayUTC);
 			
 		} catch (error) {
 			console.log(error);
@@ -340,6 +340,7 @@ useEffect(() => {
 
 
 	const startDate = new Date();
+	startDate.setDate(startDate.getDate()-1)
 	const endDate = new Date();
 	endDate.setDate(endDate.getDate() + 30);
     const subscriptionsRef = useRef([]);     
@@ -352,6 +353,7 @@ useEffect(() => {
 	const date = new Date();
 	const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
 	const timestampId = todayUTC.toISOString();
+	console.log("genId that is being tracked",currentGenId,generatorData?.id);
 	
 	setTimeout(() => {
 	  const servicesUnsubscribe = onSnapshot(
@@ -1263,9 +1265,10 @@ async function performInitialServiceStatusCheck(genId) {
 					<div className="">
 						<h2 className="font-semibold text-lg">Next Service</h2>
 						<h1 className="text-[#4CD964] text-xl">
-							{nextService?.length > 0 && nextService[0]?.date
-								? formatUtcDateString(nextService[0].date.toDate())
-								: "N/A"}
+						
+{nextService?.length > 0 && nextService[0]?.date
+  ? formatUtcDateString(nextService[0].date.toDate())
+  : "N/A"}
 						</h1>
 					</div>
 
@@ -1301,9 +1304,10 @@ async function performInitialServiceStatusCheck(genId) {
 								<span className="text-left">Next Service:</span>
 
 								<span className="text-left">
-									{nextService?.length > 0 && nextService[0]?.date
-										? formatUtcDateString(nextService[0].date.toDate())
-										: "N/A"}
+								
+{nextService?.length > 0 && nextService[0]?.date
+  ? formatUtcDateString(nextService[0].date.toDate())
+  : "N/A"}
 								</span>
 							</div>
 							<div className="grid grid-cols-2">
@@ -1441,6 +1445,11 @@ async function performInitialServiceStatusCheck(genId) {
 				</div>
 				<div className="bg-white rounded-xl shadow-md flex flex-col gap-5 relative p-5 justify-center h-full">
 				{console.log("all datats",serviceCompletionText,completed,generatorWaypointCompleted,waypointsRemaining,routeStarted,progressBar,stopsRemaining)}
+				{console.log("date data",
+  todayService?.[0]?.date ? formatUtcDateString(todayService[0].date.toDate()) : null,
+  nextService?.[0]?.date ? formatUtcDateString(nextService[0].date.toDate()) : "not defined"
+)}
+				
 					<div className="absolute top-0 right-0 text-sm">
 						<p className="p-5">{serviceCompletionText}</p>
 					</div>
@@ -1448,9 +1457,9 @@ async function performInitialServiceStatusCheck(genId) {
 						<h2 className="text-lg font-bold text-left">Live Track</h2>
 					</div>
 					<div className="text-lg font-bold h-1/2 mt-auto flex items-end">
-						{todayService?.[0]?.date &&
-						nextService?.[0]?.date &&
-						formatUtcDateString(todayService[0].date.toDate()) === formatUtcDateString(nextService[0].date.toDate())
+						{
+nextService?.[0]?.date &&todayService?.[0]?.date&&						
+formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(nextService[0]?.date.toDate())
 							? "Tracking "
 							: "Check Back On: "}
 						(
