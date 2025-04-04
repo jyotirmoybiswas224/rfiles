@@ -1,0 +1,1041 @@
+const defaultValues = {
+	parentAccount: "",
+	generatorName: "",
+	octoNumber: "",
+	internalAccountNumber: "",
+	generatorWebsite: "",
+	generatorPhone: "",
+	generatorStatus: "",
+	generatorEmail: "",
+	billingAddress: { street: "", suite: "", city: "", state: "", zipCode: "", email: "", phone: "" },
+	serviceAddress: { street: "", suite: "", city: "", state: "", zipCode: "", email: "", phone: "" },
+	// contractStartDate: "",
+	// contractEndDate: "",
+	// contractFileName: "",
+	// contractFiles: null,
+	// contractTerm: "",
+	// terminationFee: "",
+	contractDetail: {
+		startDate: null,
+		endDate: null,
+		term: "",
+		terminationFee: "",
+		file: null,
+	},
+	serviceType: [],
+	industryType: "",
+	workingHours: {
+		timeZone: "",
+		Monday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+		Tuesday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+		Wednesday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+		Thursday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+		Friday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+		Saturday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+		Sunday: {
+			open: "",
+			close: "",
+			lunchStart: "",
+			lunchEnd: "",
+			closed: false,
+			required: false,
+		},
+	},
+};
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import MapWithMarkers from "../../../../../../../../components/maps/MapWithMarkers";
+import Dropdown from "../../../../../../../../components/UI/dropdowns/Dropdown";
+import {
+	generatorStatus,
+	generatorStatusMap,
+	industryTypes,
+	serviceTypes,
+	stateTimezones,
+} from "../../../../../../../../utils/constants";
+import Input from "../../../../../../../../components/UI/Input";
+import Button from "../../../../../../../../components/UI/Button";
+import { useForm, Controller } from "react-hook-form";
+import GeneratorWorkingHours from "./components/GeneratorWorkingHours";
+import {
+	createOrUpdateGenerator,
+	getAllRoutes,
+	getGeneratorById,
+} from "../../../../../../../../utils/firebaseOperations";
+import { toast } from "react-toastify";
+import AddressForm from "./components/AddressForm";
+import { useNavigate } from "react-router-dom";
+import MultiSelectRounded from "../../../../../../../../components/UI/dropdowns/MultiSelectRounded";
+import PhoneInput from "../../../../../../../../components/UI/PhoneInput";
+import { useGeocoding } from "../../../../../../../../hooks/useGeocoding";
+import GeneratorInfoHeader from "./components/GeneratorInfoHeader";
+import CustomDatePicker from "../../../../../../../../components/UI/CustomDatePicker";
+import FileUpload from "../../../../../../../../components/UI/FileUpload";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { auth, COLLECTIONS, db, storage } from "../../../../../../../../config/firebase";
+import { getContractEndDate } from "../../../../../../../../utils/helpers";
+import { updateProfileData, updateProfileInDB } from "../../../../../../../../store/sliceReducers/formSlice";
+import { useDispatch, useSelector } from "react-redux";
+import FooterActionBtns from "./components/FooterActionBtns";
+import MapWithSingleMarker from "../../../../../../../../components/maps/MapWithSingleMarker";
+import { debounce } from "lodash";
+import {
+	startGeneratorListener,
+	stopGeneratorListener,
+} from "../../../../../../../../store/sliceReducers/generatorSlice";
+import { useAuthState } from "react-firebase-hooks/auth";
+import SearchableDropdownForParents from "../../../../../../../../components/UI/dropdowns/SearchableDropdownForParents";
+import Checkbox from "../../../../../../../../components/UI/Checkbox";
+import {
+	arrayRemove,
+	arrayUnion,
+	collection,
+	doc,
+	getDocs,
+	query,
+	updateDoc,
+	where,
+	writeBatch,
+} from "firebase/firestore";
+import useTUserContext from "../../../../../../../../context/TransporterUserContext";
+import tz_lookup from "tz-lookup";
+
+const GeneratorProfile = ({ onNextClick, onClickBack, generatorData = {}, setGeneratorData }) => {
+	const {
+		handleSubmit,
+		control,
+		setValue,
+		getValues,
+		watch,
+		trigger,
+		formState: { errors },
+	} = useForm({
+		defaultValues,
+	});
+
+	const watchBillingAddress = watch("billingAddress") || {};
+	const watchServiceAddress = watch("serviceAddress") || {};
+	const contractTerm = watch("contractDetail.term");
+	const watchGeneratorStatus = watch("generatorStatus");
+	const contractStartDate = watch("contractDetail.startDate");
+	const [isAddressesLoaded, setIsAddressesLoaded] = useState(false);
+	const { batchGeocodeGeneratorsAddresses, calculateCenterPosition } = useGeocoding();
+	const [currentCoordinates, setCurrentCoordinates] = useState(null);
+	const [isContracted, setIsContracted] = useState(false);
+	const [checkboxText, setCheckboxText] = useState("");
+	const [isModalOpen, setIsModalOpen] = useState(false);
+	const [isContractedModalOpen, setIsContractedModalOpen] = useState(false);
+	const [markers, setMarkers] = useState([]);
+	const [routesMap, setRoutesMap] = useState([]);
+	const [parentList, setParentList] = useState([]);
+	const [isUnAssigning, setIsUnAssigning] = useState(false);
+	const [statusUpdateReason, setStatusUpdateReason] = useState("");
+	const [isStatusUpdating, setIsStatusUpdating] = useState(false);
+	const dispatch = useDispatch();
+	const { user, loading } = useTUserContext();
+	const { list: generators } = useSelector((state) => state.generator);
+	const [generatorPhone, setGeneratorPhone] = useState("");
+
+	const getParentList = () =>
+		generators
+			.filter((item) => item.id !== generatorData.id && !Boolean(item.parentAccount))
+			.map((item) => ({
+				label: item.generatorName,
+				value: item.id,
+				internalAccountNumber: item.internalAccountNumber,
+				octoNumber: item.octoNumber,
+			}));
+
+	useEffect(() => {
+		if (generatorData.childs?.length == 0) {
+			setParentList(getParentList());
+		}
+	}, [generators, generatorData.id]);
+
+	useEffect(() => {
+		updateGeneratorData();
+	}, [isContracted]);
+
+	useEffect(() => {
+		if (!loading && user) dispatch(startGeneratorListener(user?.uid));
+		return () => dispatch(stopGeneratorListener());
+	}, [dispatch, loading, user]);
+
+	const fetchAllRoutesOptions = async () => {
+		try {
+			const resp = await getAllRoutes(user?.uid);
+			const options = [];
+			let map = {};
+			resp.map((item) => {
+				options.push({
+					label: item.routeLabel,
+					value: item.id,
+				});
+				map[item.id] = item.routeLabel;
+			});
+			setRoutesMap(map);
+		} catch (error) {
+			console.log("Error fetching routes", error);
+		}
+	};
+
+	const updateGeneratorData = async () => {
+		const data = await getGeneratorById(generatorData.id);
+		setGeneratorData(data);
+	};
+
+	useEffect(() => {
+		if (user && !loading) fetchAllRoutesOptions();
+	}, [loading, user]);
+
+	// useEffect(() => {
+	// 	if (generatorData?.id) updateGeneratorData();
+	// }, []);
+
+	console.log({ generatorData });
+
+	const debouncedGeocoding = useMemo(
+		() =>
+			debounce(async (address) => {
+				if (!address) return;
+
+				try {
+					setIsAddressesLoaded(false);
+					console.log("Fetching new coordinates for:", address);
+
+					const markers = await batchGeocodeGeneratorsAddresses([
+						{
+							name: generatorData.generatorName || "New Generator",
+							serviceAddress: address,
+						},
+					]);
+
+					if (markers && markers[0]) {
+						setMarkers(markers);
+						setCurrentCoordinates({
+							lat: markers[0].lat,
+							lng: markers[0].lng,
+						});
+						setValue("workingHours.timeZone", tz_lookup(markers[0].lat, markers[0].lng));
+					}
+
+					setIsAddressesLoaded(true);
+				} catch (error) {
+					console.error("Geocoding error:", error);
+					toast.error("Error getting location coordinates");
+					setIsAddressesLoaded(true);
+				}
+			}, 1000),
+		[generatorData.generatorName]
+	);
+
+	const isAddressComplete = (address) => {
+		return address.street?.trim() && address.city?.trim() && address.state?.trim() && address.zipCode?.trim();
+	};
+
+	const formatAddress = (address) => {
+		return `${address.street?.trim()} ${address.city.trim()} ${address.state.trim()} ${address.zipCode.trim()}`.toLowerCase();
+	};
+
+	useEffect(() => {
+		const serviceAddress = watchServiceAddress;
+
+		if (!isAddressComplete(serviceAddress)) {
+			setCurrentCoordinates(null);
+			setMarkers([]);
+			return;
+		}
+
+		// const genTimeZone = stateTimezones[serviceAddress.state];
+		// setValue("workingHours.timeZone", genTimeZone);
+
+		const currentAddressString = formatAddress(serviceAddress);
+		const oldAddressString = generatorData.serviceAddress ? formatAddress(generatorData.serviceAddress) : "";
+
+		const handleAddressUpdate = async () => {
+			try {
+				setIsAddressesLoaded(false);
+				console.log("Fetching new coordinates for:", serviceAddress);
+
+				const markers = await batchGeocodeGeneratorsAddresses([
+					{
+						name: generatorData.generatorName || "New Generator",
+						serviceAddress: serviceAddress,
+					},
+				]);
+
+				if (markers?.[0]) {
+					setMarkers(markers);
+					const currentTimeZone = tz_lookup(markers[0].lat, markers[0].lng);
+					setValue("workingHours.timeZone", currentTimeZone);
+					setCurrentCoordinates({
+						lat: markers[0].lat,
+						lng: markers[0].lng,
+					});
+				} else {
+					throw new Error("No coordinates found for the address");
+				}
+			} catch (error) {
+				console.error("Geocoding error:", error);
+				toast.error("Error getting location coordinates");
+				setCurrentCoordinates(null);
+				setMarkers([]);
+			} finally {
+				setIsAddressesLoaded(true);
+			}
+		};
+
+		if (currentAddressString !== oldAddressString) {
+			handleAddressUpdate();
+		} else if (generatorData.serviceAddCoordinates?.lat && generatorData.serviceAddCoordinates?.lng) {
+			const { lat, lng } = generatorData.serviceAddCoordinates;
+			setMarkers([
+				{
+					...generatorData,
+					lat,
+					lng,
+					name: generatorData.generatorName,
+					key: Math.random().toString(36).substr(2, 9),
+					formattedAdd: currentAddressString,
+				},
+			]);
+			setCurrentCoordinates({ lat, lng });
+			setIsAddressesLoaded(true);
+		} else if (isAddressComplete(serviceAddress)) {
+			handleAddressUpdate();
+		}
+	}, [watchServiceAddress.street, watchServiceAddress.city, watchServiceAddress.state, watchServiceAddress.zipCode]);
+
+	useEffect(() => {
+		if (generatorData) {
+			setCurrentCoordinates(generatorData["serviceAddCoordinates"]);
+			Object.keys(defaultValues).forEach((key) => {
+				setValue(key, generatorData[key]);
+			});
+
+			if (
+				!generatorData.serviceAddress?.city &&
+				!generatorData.serviceAddress?.state &&
+				!generatorData.serviceAddress?.zipCode
+			) {
+				setIsAddressesLoaded(true);
+			} else {
+				console.log("Not set to true", generatorData.serviceAddress);
+			}
+			console.log({
+				generatorData,
+				generatorStatus: generatorData?.generatorStatus,
+				formGenStatus: getValues("generatorStatus"),
+			});
+
+			if (generatorData?.serviceSchedules?.length > 0) {
+				setIsContracted(true);
+				// setCheckboxText(generatorStatusMap["CONTRACTED_SCHEDULED"]);
+				// setValue("generatorStatus", "CONTRACTED_SCHEDULED");
+			} else if (
+				generatorData?.generatorStatus == "CONTRACTED_UNSCHEDULED" ||
+				generatorData?.generatorStatus == "PARKING" ||
+				generatorData?.generatorStatus == "NIGO" ||
+				generatorData?.generatorStatus == "CONTRACTED_SCHEDULED"
+			) {
+				setIsContracted(true);
+				// setCheckboxText(generatorStatusMap[generatorData?.generatorStatus]);
+			} else {
+				setIsContracted(false);
+			}
+		}
+	}, [generatorData]);
+
+	const onSubmit = async (data) => {
+		// const phoneNumberDigits = generatorPhone.replace(/\D/g, ""); // Remove non-digit characters
+		// if (phoneNumberDigits.length < 10) {
+		// 	toast.error("Please enter a valid phone number.");
+		// 	return;
+		// }
+
+		try {
+			const isBillingAddressFilled = Object.values(data.billingAddress).some((value) => value.trim() !== "");
+			const isServiceAddressFilled = isAddressComplete(data.serviceAddress);
+
+			if (isBillingAddressFilled) {
+				const isBillingValid = await trigger("billingAddress");
+				if (!isBillingValid) {
+					toast.error("Please fill all required fields in the billing address.");
+					return;
+				}
+			}
+
+			if (isServiceAddressFilled) {
+				const isServiceValid = await trigger("serviceAddress");
+				if (!isServiceValid) {
+					toast.error("Please fill all required fields in the service address.");
+					return;
+				}
+
+				if (!currentCoordinates?.lat || !currentCoordinates?.lng) {
+					toast.error("Unable to get location coordinates. Please verify the service address.");
+					return;
+				}
+			}
+
+			const dataToBeSent = {
+				id: generatorData.id,
+				...data,
+				previousParentAccount: generatorData.parentAccount,
+				onboardingStatus: {
+					...(generatorData.onboardingStatus || {}),
+					registrationCompleted: true,
+					profileCompleted: true,
+					contactsCompleted: true,
+				},
+			};
+
+			if (currentCoordinates) {
+				dataToBeSent.serviceAddCoordinates = currentCoordinates;
+			}
+
+			if (data.contractFiles) {
+				const { contractFiles, isServiceCopyChecked, isBillingCopyChecked, ...rest } = dataToBeSent;
+
+				const storageRef = ref(storage, `/admin1/generator-${dataToBeSent?.id}/contractFiles/${contractFiles?.name}`);
+
+				const snapshot = await uploadBytes(storageRef, contractFiles);
+				const downloadURL = await getDownloadURL(snapshot.ref);
+				const urlParams = new URL(downloadURL).searchParams;
+				const token = urlParams.get("token");
+
+				rest.contractDetail = {
+					...data.contractDetail,
+					file: {
+						name: contractFiles?.name,
+						link: downloadURL,
+						mime: contractFiles?.type,
+						path: storageRef.fullPath,
+						ref: "",
+						token: token ?? "",
+					},
+				};
+
+				dispatch(updateProfileData(rest));
+				await dispatch(updateProfileInDB(rest));
+			} else {
+				const { isServiceCopyChecked, isBillingCopyChecked, contractFiles, ...rest } = dataToBeSent;
+
+				rest.contractDetail = {
+					startDate: null,
+					endDate: null,
+					term: "",
+					terminationFee: "",
+					file: null,
+					...rest.contractDetail,
+				};
+
+				dispatch(updateProfileData(rest));
+				await dispatch(updateProfileInDB(rest));
+			}
+
+			toast.success("Saved successfully!");
+			onNextClick();
+		} catch (error) {
+			console.error("Error saving generator profile:", error);
+			toast.error("Error saving data: " + error.message);
+		}
+	};
+
+	const handleCopyAddress = (isChecked, copyfrom) => {
+		if (copyfrom == "service") {
+			if (isChecked && watchBillingAddress) {
+				Object.keys(watchBillingAddress).forEach((key) => {
+					setValue(`serviceAddress.${key}`, watchBillingAddress[key]);
+				});
+			}
+		} else if (copyfrom == "billing") {
+			if (isChecked && watchServiceAddress) {
+				Object.keys(watchServiceAddress).forEach((key) => {
+					setValue(`billingAddress.${key}`, watchServiceAddress[key]);
+				});
+			}
+		}
+	};
+
+	const initialCenter = useMemo(() => {
+		return markers.length > 0 ? calculateCenterPosition(markers) : { lat: 32.7157, lng: -117.1611 };
+	}, [markers]);
+
+	const onDeleteFile = () => {
+		console.log("File deleted");
+	};
+
+	useEffect(() => {
+		if (contractStartDate && contractTerm) {
+			let contractEndDate = getContractEndDate(contractStartDate, contractTerm);
+			setValue("contractDetail.endDate", contractEndDate);
+		}
+	}, [contractTerm, contractStartDate]);
+
+	const unAssignParentToGen = async () => {
+		setIsUnAssigning(true);
+	};
+
+	const handleIsAssigning = async () => {
+		console.log({ parentAccount: generatorData.parentAccount });
+		console.log({ childAccount: generatorData.id });
+		try {
+			// Update parent account
+			let parentDocRef = doc(db, COLLECTIONS.generators, generatorData.parentAccount);
+			await updateDoc(parentDocRef, {
+				childs: arrayRemove(generatorData.id),
+			});
+
+			// Updating child account
+			let childDocRef = doc(db, COLLECTIONS.generators, generatorData.id);
+			await updateDoc(childDocRef, {
+				...getValues(),
+				parentAccount: "",
+			});
+			let rest = generatorData;
+			rest.parentAccount = "";
+			dispatch(updateProfileData(rest));
+			toast.dismiss();
+			toast.success("Unassigned successfully!");
+		} catch (error) {
+			console.log("Something went wrong,", error);
+		} finally {
+			setValue("parentAccount", "", { shouldValidate: true });
+			trigger("parentAccount");
+			setIsUnAssigning(false);
+		}
+	};
+
+	const handleIsChecked = async (isChecked) => {
+		try {
+			let currentGeneratorStatus = generatorData.generatorStatus;
+			if (generatorData.serviceSchedules?.length > 0 || currentGeneratorStatus == "CONTRACTED_UNSCHEDULED") {
+				setIsModalOpen(true);
+				// Delete schedules
+				// } else if (currentGeneratorStatus == "CONTRACTED_UNSCHEDULED" && !isChecked) {
+				// 	let genDocRef = doc(db, COLLECTIONS.generators, generatorData.id);
+				// 	await updateDoc(genDocRef, {
+				// 		...getValues(),
+				// 		generatorStatus: "CANCELED",
+				// 	});
+				// 	setIsContracted(false);
+				// 	setValue("generatorStatus", "CANCELED");
+			} else {
+				setIsContractedModalOpen(true);
+			}
+			console.log({ currentGeneratorStatus, isChecked, values: getValues() });
+		} catch (error) {
+			console.log({ error });
+		}
+	};
+
+	const handleIsContracted = async () => {
+		let newStatus = "CONTRACTED_UNSCHEDULED";
+		console.log({ generatorData });
+		const docRef = doc(db, "generators", generatorData.id);
+		const data = {
+			...getValues(),
+			parentAccount: getValues("parentAccount"),
+			generatorStatus: newStatus,
+		};
+		if (getValues("parentAccount") && parentList.find((item) => item.value == getValues("parentAccount"))) {
+			let parentId = getValues("parentAccount");
+			const parentDocRef = doc(db, "generators", parentId);
+			await updateDoc(parentDocRef, {
+				childs: arrayUnion(generatorData.id),
+			});
+		}
+		try {
+			await updateDoc(docRef, data);
+			setValue("generatorStatus", newStatus);
+			setIsContracted(true);
+			setParentList(getParentList());
+			setGeneratorData((prev) => ({ ...prev, parentAccount: getValues("parentAccount"), generatorStatus: newStatus }));
+		} catch (error) {
+			console.log({ error });
+		} finally {
+			setIsContractedModalOpen(false);
+		}
+	};
+
+	const handleDeletion = async () => {
+		let serviceScheduleIds = generatorData?.serviceSchedules;
+
+		if (!statusUpdateReason || statusUpdateReason?.length == 0) {
+			toast.info("Please, add the reason for removing from contract!");
+			return;
+		}
+
+		if (generatorData?.generatorStatus == "CONTRACTED_UNSCHEDULED") {
+			let genDocRef = doc(db, COLLECTIONS.generators, generatorData.id);
+			await updateDoc(genDocRef, {
+				...getValues(),
+				generatorStatus: "CANCELED",
+			});
+			setIsContracted(false);
+			setValue("generatorStatus", "CANCELED");
+			toast.success("Removed from contract.");
+			setIsModalOpen(false);
+			return;
+		}
+		toast.loading("Deleting scheduled services...");
+		const batch = writeBatch(db);
+
+		try {
+			serviceScheduleIds.forEach((id) => {
+				const serviceScheduleRef = doc(db, COLLECTIONS.serviceSchedules, id);
+				batch.update(serviceScheduleRef, { isDeleted: true });
+			});
+
+			if (serviceScheduleIds.length > 0) {
+				const scheduledServicesRef = collection(db, COLLECTIONS.scheduledServices);
+				const scheduledServicesQuery = query(
+					scheduledServicesRef,
+					where("serviceScheduleId", "in", serviceScheduleIds)
+				);
+				const scheduledServicesSnap = await getDocs(scheduledServicesQuery);
+
+				scheduledServicesSnap.forEach((doc) => {
+					batch.update(doc.ref, { status: "DELETED" });
+				});
+			}
+
+			let genDocRef = doc(db, COLLECTIONS.generators, generatorData.id);
+			batch.update(genDocRef, {
+				...getValues(),
+				generatorStatus: "CANCELED",
+			});
+
+			await batch.commit();
+			console.log("Generator data deleted successfully!");
+		} catch (error) {
+			console.error("Error deleting generator data:", error);
+		} finally {
+			toast.dismiss();
+			toast.success("Deleted successfully!");
+			setIsContracted(false);
+			// setCheckboxText("Contracted");
+			setValue("generatorStatus", "CANCELED");
+			setIsModalOpen(false);
+		}
+	};
+
+	const generatorStatusOptions = useMemo(() => {
+		let options = [];
+		if (watchGeneratorStatus == "CONTRACTED_SCHEDULED" || generatorData.generatorStatus == "CONTRACTED_SCHEDULED") {
+			options = generatorStatus.filter(
+				(item) => item.value == "NIGO" || item.value == "PARKING" || item.value == "CONTRACTED_SCHEDULED"
+			);
+		} else if (
+			watchGeneratorStatus == "CONTRACTED_UNSCHEDULED" ||
+			generatorData.generatorStatus == "CONTRACTED_UNSCHEDULED"
+		) {
+			options = generatorStatus.filter((item) => item.value == "NIGO" || item.value == "CONTRACTED_UNSCHEDULED");
+		} else if (watchGeneratorStatus == "NIGO" || generatorData.generatorStatus == "NIGO") {
+			options = generatorStatus.filter((item) => item.value == "CONTRACTED_UNSCHEDULED" || item.value == "NIGO");
+		} else if (watchGeneratorStatus == "PARKING" || generatorData.generatorStatus == "PARKING") {
+			options = generatorStatus.filter((item) => item.value == "CONTRACTED_UNSCHEDULED" || item.value == "PARKING");
+		} else if (watchGeneratorStatus == "CANCELED" || generatorData.generatorStatus == "CANCELED") {
+			options = generatorStatus.filter(
+				(item) => item.value == "DEAD_FILE" || item.value == "PROSPECT" || item.value == "CANCELED"
+			);
+		} else {
+			options = generatorStatus;
+		}
+		return options;
+	}, [generatorData, watchGeneratorStatus]);
+
+	console.log("====================================");
+	console.log({ formStatus: getValues("generatorStatus"), dbStatus: generatorData?.generatorStatus });
+	console.log("====================================");
+
+	const handleStatusOnChange = async (val, func) => {
+		console.log({ val });
+		setIsStatusUpdating(true);
+		func(val);
+	};
+
+	const handleStatusUpdating = async () => {
+		let newStatus = getValues("generatorStatus");
+		let reasonForStatusChange = statusUpdateReason;
+		if (!reasonForStatusChange || reasonForStatusChange?.length == 0) {
+			toast.info("Please, add the reason for status change!");
+		} else {
+			try {
+				let docRef = doc(db, COLLECTIONS.generators, generatorData.id);
+				await updateDoc(docRef, { generatorStatus: newStatus, reasonForStatusChange });
+			} catch (error) {
+				console.log(error);
+			} finally {
+				setIsStatusUpdating(false);
+				setStatusUpdateReason("");
+			}
+		}
+	};
+
+	console.log({ parentList, parentId: getValues("parentAccount") });
+
+	return (
+		<form
+			onSubmit={handleSubmit(onSubmit)}
+			className="bg-white p-8 pt-6 mb-8 flex flex-col rounded-cardRadii flex-grow"
+		>
+			<GeneratorInfoHeader generatorData={generatorData} />
+			<div className="grid gap-2">
+				<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Generator Profile</h6>
+				<div className="flex gap-8 w-full">
+					<div className="w-1/2">
+						<Controller
+							name="generatorName"
+							control={control}
+							rules={{ required: "Generator Name is required" }}
+							render={({ field: { onChange, value } }) => (
+								<Input label="Generator Name" value={value} onChange={onChange} isRequired={true} />
+							)}
+						/>
+						{errors.generatorName && <p className="text-red-500 text-sm mt-1">{errors.generatorName.message}</p>}
+						<Controller
+							name="octoNumber"
+							control={control}
+							rules={{ required: "Octo Number is required" }}
+							render={({ field: { onChange, value } }) => (
+								<Input
+									label="OCTO Number"
+									isDisabled={true}
+									extra="bg-inputBg"
+									value={value}
+									onChange={onChange}
+									isRequired={true}
+								/>
+							)}
+						/>
+						{errors.octoNumber && <p className="text-red-500 text-sm mt-1">{errors.octoNumber.message}</p>}
+						<Controller
+							name="internalAccountNumber"
+							control={control}
+							render={({ field: { onChange, value } }) => (
+								<Input label="Internal Account Number" value={value} onChange={onChange} />
+							)}
+						/>
+						<Controller
+							name="generatorWebsite"
+							control={control}
+							render={({ field: { onChange, value } }) => (
+								<Input label="Generator Website" value={value} onChange={onChange} type="url" />
+							)}
+						/>
+					</div>
+
+					<div className="w-1/2">
+						<Controller
+							name="parentAccount"
+							control={control}
+							render={({ field: { onChange, value } }) => (
+								<div className="w-full relative">
+									<SearchableDropdownForParents
+										label={"Parent Account"}
+										customType={generatorData?.parentAccount}
+										options={parentList}
+										value={value}
+										onChange={onChange}
+										customFunction={() => unAssignParentToGen()}
+									/>
+								</div>
+							)}
+						/>
+						{errors.parentAccount && <p className="text-red-500 text-sm mt-1">{errors.parentAccount.message}</p>}
+						<Controller
+							name="generatorPhone"
+							control={control}
+							rules={{
+								validate: (value) => {
+									const phoneNumberDigit = value.replace(/\D/g, "");
+									if (phoneNumberDigit && phoneNumberDigit.length !== 10) {
+										return "Phone number must be 10 digits";
+									}
+									return true;
+								},
+							}}
+							render={({ field: { onChange, value }, fieldState: { error } }) => (
+								<div>
+									<PhoneInput label="Generator Main Phone" value={value} onChange={onChange} />
+								</div>
+							)}
+						/>
+
+						{errors.generatorPhone && <p className="text-red-500 text-sm mt-1">{errors.generatorPhone.message}</p>}
+						<Controller
+							name="generatorEmail"
+							control={control}
+							rules={{
+								pattern: {
+									value: /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
+									message: "Please enter a valid email address",
+								},
+							}}
+							render={({ field: { onChange, value } }) => (
+								<Input label="Generator Email" value={value} onChange={onChange} />
+							)}
+						/>
+						<Controller
+							name="generatorStatus"
+							control={control}
+							rules={{ required: "Generator Status is required" }}
+							render={({ field: { onChange, value } }) => (
+								<Dropdown
+									label="Generator Status"
+									options={generatorStatusOptions}
+									isDisabled={generatorData.generatorStatus == "PROSPECT"}
+									value={value}
+									onChange={(val) => handleStatusOnChange(val, onChange)}
+									isRequired={true}
+								/>
+							)}
+						/>
+						{errors.generatorStatus && <p className="text-red-500 text-sm mt-1">{errors.generatorStatus.message}</p>}
+						<Controller
+							name="industryType"
+							control={control}
+							render={({ field: { onChange, value } }) => (
+								<Dropdown
+									label="Industry Type"
+									options={industryTypes}
+									value={value}
+									onChange={onChange}
+									isRequired={false}
+									listHeight="h-fit max-h-72"
+								/>
+							)}
+						/>
+
+						<div className="flex justify-end">
+							<Checkbox
+								styles="gap-2"
+								// label={checkboxText?.length > 0 ? checkboxText : "Contracted"}
+								label={"Contracted"}
+								type="primary"
+								isChecked={isContracted}
+								setIsChecked={(isChecked) => handleIsChecked(isChecked)}
+							/>
+						</div>
+					</div>
+				</div>
+			</div>
+			<AddressForm
+				control={control}
+				handleCopyAddress={handleCopyAddress}
+				errors={errors}
+				trigger={trigger}
+				serviceAddressLabel="Generator Service Information"
+				billingAddressLabel="Generator Billing Information"
+			/>
+			<div className="py-4">
+				<GeneratorWorkingHours
+					control={control}
+					errors={errors}
+					getValues={getValues}
+					setValue={setValue}
+					watch={watch}
+				/>
+			</div>
+			<FooterActionBtns onClickBack={onClickBack} />
+			{isModalOpen && (
+				<div className="z-40 fixed inset-0 bg-[#CCCCCC87] bg-opacity-50 flex justify-center items-center ">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => setIsModalOpen(false)}
+							>
+								✕
+							</button>
+						</div>
+						<h3 className="font-bold text-lg">Are you sure?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">
+								By unchecking this box that you are terminating all future services of this generator however all
+								historical data will be preserved.
+							</p>
+						</div>
+						<div className={`py-5 block`}>
+							<label htmlFor="cancellationNote">
+								<p>Enter Note for Terminating Contract *</p>
+								<textarea
+									rows={3}
+									name="cancellationNote"
+									value={statusUpdateReason}
+									onChange={(e) => setStatusUpdateReason(e.target.value)}
+									className={` w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none  focus:ring-1 focus:ring-dashInActiveBtnText`}
+								/>
+							</label>
+						</div>
+						<div className="flex w-full justify-between">
+							<button className={`btn btn-error btn-sm`} type="button" onClick={handleDeletion}>
+								{"Terminate The Contract"}
+							</button>
+							<button type="button" className={`btn ${"btn-primary"} btn-sm`} onClick={() => setIsModalOpen(false)}>
+								{"Keep The Contract"}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			{isContractedModalOpen && (
+				<div className="z-40 fixed inset-0 bg-[#CCCCCC87] bg-opacity-50 flex justify-center items-center ">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => {
+									setIsContractedModalOpen(false);
+									setIsUnAssigning(false);
+								}}
+							>
+								✕
+							</button>
+						</div>
+						<h3 className="font-bold text-lg">Are you sure?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">
+								By checking this box, you confirm that this generator is covered by a valid service contract. This
+								ensures proper enrollment for routing and enables accurate tracking within the system.
+							</p>
+						</div>
+						<div className="flex w-full justify-between">
+							<button type="button" className={`btn btn-error btn-sm`} onClick={() => setIsContractedModalOpen(false)}>
+								{"No"}
+							</button>
+							<button className={`btn btn-primary btn-sm`} type="button" onClick={handleIsContracted}>
+								{"Yes"}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			{isUnAssigning && (
+				<div className="z-40 fixed inset-0 bg-[#CCCCCC87] bg-opacity-50 flex justify-center items-center ">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => setIsUnAssigning(false)}
+							>
+								✕
+							</button>
+						</div>
+						<h3 className="font-bold text-lg">Are you sure?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">You are about to unassign this child account from parent account</p>
+						</div>
+						<div className="flex w-full justify-between">
+							<button className={`btn btn-error btn-sm`} type="button" onClick={handleIsAssigning}>
+								{"Unassign"}
+							</button>
+							<button type="button" className={`btn ${"btn-primary"} btn-sm`} onClick={() => setIsUnAssigning(false)}>
+								{"Keep This Assigned"}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			{isStatusUpdating && (
+				<div className="z-40 fixed inset-0 bg-[#CCCCCC87] bg-opacity-50 flex justify-center items-center ">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => {
+									setValue("generatorStatus", generatorData.generatorStatus);
+									setIsStatusUpdating(false);
+								}}
+							>
+								✕
+							</button>
+						</div>
+						<h3 className="font-bold text-lg">Are you sure?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">Proceeding with this operation will change the generator status.</p>
+						</div>
+						<div className={`py-5 block`}>
+							<label htmlFor="cancellationNote">
+								<p>Enter Note for Status Update *</p>
+								<textarea
+									rows={3}
+									name="cancellationNote"
+									value={statusUpdateReason}
+									onChange={(e) => setStatusUpdateReason(e.target.value)}
+									className={` w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none  focus:ring-1 focus:ring-dashInActiveBtnText`}
+								/>
+							</label>
+						</div>
+						<div className="flex w-full justify-between">
+							<button className={`btn btn-error btn-sm`} type="button" onClick={handleStatusUpdating}>
+								{"Update The Status"}
+							</button>
+							<button
+								type="button"
+								className={`btn ${"btn-primary"} btn-sm`}
+								onClick={() => {
+									setValue("generatorStatus", generatorData.generatorStatus);
+									setIsStatusUpdating(false);
+								}}
+							>
+								{"Keep Current Status"}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+		</form>
+	);
+};
+
+export default GeneratorProfile;
+
