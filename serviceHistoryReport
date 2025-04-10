@@ -48,6 +48,8 @@ import Button from "../../../../../components/UI/Button";
 import useTUserContext from "../../../../../context/TransporterUserContext";
 import { toast } from "react-toastify";
 import { BiTrash } from "react-icons/bi";
+import { log } from "handlebars";
+import OptionsContainer from "./OptionsContainer";
 
 const transStatusOptions = [
 	{
@@ -63,6 +65,61 @@ const transStatusOptions = [
 		value: transferStatusType.COMPLETE,
 	},
 ];
+
+const getStringOfServiceTypes = (scheduleData) => {
+	if (!scheduleData || !scheduleData.serviceType || !serviceTypes) {
+		return "N/A";
+	}
+	return Array.isArray(scheduleData.serviceType)
+		? scheduleData.serviceType.reduce((accumulator, serviceType) => {
+				const matchingService = serviceTypes.find((service) => service.value === serviceType);
+				return accumulator.concat(matchingService ? matchingService.label : "N/A");
+		  }, [])
+		: scheduleData.serviceType;
+};
+
+const getFormattedAddress = (add) => {
+	const addressParts = [add.serviceAddress?.street, add.serviceAddress?.city, add.serviceAddress?.state].filter(
+		Boolean
+	);
+
+	const address = addressParts.length
+		? addressParts.join(", ") + (add.serviceAddress?.zipCode ? ` ${add.serviceAddress.zipCode}` : "")
+		: "--";
+
+	return address;
+};
+
+const handleDeliveryView = async (id, url) => {
+	console.log("id,url", { id, url });
+
+	if (url && url?.length > 0) {
+		window.open(url, "_blank");
+	} else {
+		const fetchUrl = getDeliveryUrl(id);
+		console.log("fetchUrl", fetchUrl);
+		window.open(fetchUrl, "_blank");
+	}
+};
+
+const sortedServiceSummary = (summary) =>
+	summary.sort((a, b) => {
+		const aType = a.subWasteType?.toLowerCase() || "";
+		const bType = b.subWasteType?.toLowerCase() || "";
+		return aType.localeCompare(bType);
+	});
+
+const handleManifestView = async (id, url) => {
+	console.log({ id, url });
+
+	if (url && url?.length > 0) {
+		window.open(url, "_blank");
+	} else {
+		const fetchUrl = getManifestUrl(id);
+		console.log("fetchUrl", fetchUrl);
+		window.open(fetchUrl, "_blank");
+	}
+};
 
 const ServiceReporting = () => {
 	const [isLoading, setIsLoading] = useState(true);
@@ -97,6 +154,7 @@ const ServiceReporting = () => {
 	const [newDelContainers, setNewDelContainers] = useState([]);
 	const [selectedRows, setSelectedRows] = useState([]);
 	const [isDeleting, setIsDeleting] = useState(null);
+	const [dateFilterManuallyChanged, setDateFilterManuallyChanged] = useState(false);
 	const [editing, setEditing] = useState({
 		serviceId: null,
 		section: null,
@@ -105,16 +163,52 @@ const ServiceReporting = () => {
 	const [editedData, setEditedData] = useState({});
 	const { user, loading } = useTUserContext();
 	const selectAllRef = useRef();
+	const [containerPriceBook, setContainerPriceBook] = useState({});
+	const [showAddContainerModal, setShowAddContainerModal] = useState(false);
+	const [newContainerData, setNewContainerData] = useState({
+		subWasteType: "",
+		containerType: "",
+		quantity: 1,
+		weight: 0,
+		rate: 0,
+		total: 0,
+	});
 
-   const urlParams = new URLSearchParams(window.location.search);
-   const genOctoNumber = urlParams.get("id");
+	// Load once during component mount or on page load
+	const loadContainerPriceBook = async () => {
+		const containersRef = collection(db, "defaultPriceBook", "services", "containers");
+		const snapshot = await getDocs(containersRef);
 
-	useEffect(()=>{
-    if(genOctoNumber){
-    console.log("genOctonumber",genOctoNumber);
-    setSearchQuery(genOctoNumber)
-    }
-	},[genOctoNumber])
+		const containerMap = {};
+		snapshot.forEach((doc) => {
+			containerMap[doc.id] = doc.data();
+		});
+
+		return containerMap;
+	};
+
+	useEffect(() => {
+		loadContainerPriceBook().then(setContainerPriceBook);
+	}, []);
+
+	const urlParams = new URLSearchParams(window.location.search);
+	const genOctoNumber = urlParams.get("id");
+
+	useEffect(() => {
+		if (genOctoNumber) {
+			console.log("genOctonumber", genOctoNumber);
+			setSearchQuery(genOctoNumber);
+			// viewButtonHandler(gen);
+		}
+	}, [genOctoNumber]);
+	useEffect(() => {
+		// User has manually changed the date filter
+		console.log("filteraloowance",from,to,genOctoNumber,dateFilterManuallyChanged);
+		
+		if (from && to && genOctoNumber && !dateFilterManuallyChanged) {
+		  setDateFilterManuallyChanged(true);
+		}
+	  }, [from.toDateString(), to.toDateString()]);
 
 	const fetchAllDriverOptions = async () => {
 		try {
@@ -188,30 +282,6 @@ const ServiceReporting = () => {
 		if (user && !genIdsLoading) viewButtonHandler();
 	}, [to, from, user, genIdsLoading]);
 
-	const getStringOfServiceTypes = (scheduleData) => {
-		if (!scheduleData || !scheduleData.serviceType || !serviceTypes) {
-			return "N/A";
-		}
-		return Array.isArray(scheduleData.serviceType)
-			? scheduleData.serviceType.reduce((accumulator, serviceType) => {
-					const matchingService = serviceTypes.find((service) => service.value === serviceType);
-					return accumulator.concat(matchingService ? matchingService.label : "N/A");
-			  }, [])
-			: scheduleData.serviceType;
-	};
-
-	const getFormattedAddress = (add) => {
-		const addressParts = [add.serviceAddress?.street, add.serviceAddress?.city, add.serviceAddress?.state].filter(
-			Boolean
-		);
-
-		const address = addressParts.length
-			? addressParts.join(", ") + (add.serviceAddress?.zipCode ? ` ${add.serviceAddress.zipCode}` : "")
-			: "--";
-
-		return address;
-	};
-
 	useEffect(() => {
 		const fetchContainers = async () => {
 			try {
@@ -224,6 +294,7 @@ const ServiceReporting = () => {
 				});
 
 				setContainersMap(containersData);
+				console.log({ containersData });
 			} catch (error) {
 				console.error("Error fetching containers:", error);
 			}
@@ -267,24 +338,26 @@ const ServiceReporting = () => {
 	}, []);
 
 	const getSummaryData = (consolidated, itemized) => {
-		console.log({ consolidated, itemized });
-
 		const summary = [];
-		consolidated?.forEach((el, index) =>
+
+		consolidated?.forEach((el, index) => {
+			console.log({ el, containerPriceBook });
+
 			summary.push({
 				...el,
 				_source: "consolidated",
 				_index: index,
-			})
-		);
+				priceBookData: containerPriceBook[el.containerType] || null,
+			});
+		});
 		itemized?.forEach((el, index) =>
 			summary.push({
 				...el,
 				_source: "itemized",
 				_index: index,
+				priceBookData: containerPriceBook[el.containerType] || null,
 			})
 		);
-		console.log({ summary });
 
 		return summary;
 	};
@@ -298,7 +371,8 @@ const ServiceReporting = () => {
 			showErrorToastMessage("Please select to date.");
 			return;
 		}
-		const utcFromDate = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0);
+		const shouldBypassDateFilter = genOctoNumber && !dateFilterManuallyChanged;
+		const utcFromDate = shouldBypassDateFilter ?new Date(1,1,2025):new Date(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0);
 		const utcToDate = new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999);
 
 		console.log({ utcFromDate, utcToDate });
@@ -306,8 +380,7 @@ const ServiceReporting = () => {
 			collection(db, "scheduledServices"),
 			where("completedAt", ">=", utcFromDate),
 			where("completedAt", "<=", utcToDate),
-			where("status", "==", SERVICE_STATUS.COMPLETE)
-			// where("transporterId", "==", user.uid)
+			where("status", "in", [SERVICE_STATUS.COMPLETE, SERVICE_STATUS.DELETED])
 		);
 
 		try {
@@ -321,6 +394,7 @@ const ServiceReporting = () => {
 			let allDocs = snap.docs
 				.map((doc) => ({ id: doc.id, ...doc.data() }))
 				.filter((doc) => genIds.includes(doc.generatorId));
+			console.log("allDocs", allDocs);
 
 			const jobs = allDocs.map(async (serviceData) => {
 				if (serviceData?.consolidated?.length > 0) {
@@ -335,7 +409,7 @@ const ServiceReporting = () => {
 						tempTotalQuantity++;
 					});
 				}
-				// Fetch servicedContainers data
+
 				let transferStatus = "COMPLETE";
 				if (Array.isArray(serviceData.consolidated) && serviceData.consolidated.length > 0) {
 					console.log({ consolidated: serviceData.consolidated });
@@ -355,7 +429,6 @@ const ServiceReporting = () => {
 				} else {
 					serviceData.transferStatus = "PENDING";
 				}
-
 				const scheduleDataRef = doc(db, `${COLLECTIONS.serviceSchedules}/${serviceData.serviceScheduleId}`);
 				const scheduleRes = await getDoc(scheduleDataRef);
 				if (!scheduleRes.exists()) return;
@@ -401,6 +474,13 @@ const ServiceReporting = () => {
 					console.log({ serviceData, generatorData, routeData });
 				}
 
+				let serviceSummary = await getSummaryData(serviceData.consolidated, serviceData.itemized);
+
+				console.log({
+					approvedDate: serviceData?.approvedDate?.toDate()?.toLocaleDateString(),
+					paidDate: serviceData?.paidDate?.toDate()?.toLocaleDateString(),
+				});
+
 				allCompletedServices.push({
 					id: serviceData.id,
 					date: serviceData.date,
@@ -427,7 +507,10 @@ const ServiceReporting = () => {
 					billingNote: serviceData?.billingNote,
 					billedDate: serviceData?.billedDate?.toDate()?.toLocaleDateString() ?? null,
 					paidDate: serviceData?.paidDate?.toDate()?.toLocaleDateString() ?? null,
-					paid: serviceData?.isPaid ?? false,
+					approvedDate: serviceData?.approvedDate?.toDate()?.toLocaleDateString() ?? null,
+					approvedNote: serviceData?.approvedNote,
+					approved: serviceData?.approved ? true : false,
+					paid: serviceData?.paid ?? false,
 					paidAmount: serviceData?.paidAmount ?? "--",
 					picture: Array.isArray(serviceData?.serviceImages) ? serviceData?.serviceImages : [],
 					optionChecked: false,
@@ -442,7 +525,7 @@ const ServiceReporting = () => {
 					transporterId: user.uid,
 					serviceStatus: serviceData?.status ?? "--",
 					transferStatus: serviceData?.transferStatus,
-					serviceSummary: getSummaryData(serviceData.consolidated, serviceData.itemized),
+					serviceSummary,
 					deliverySummary,
 					deliveryReceipt,
 					noWaste: serviceData?.noWaste,
@@ -454,7 +537,7 @@ const ServiceReporting = () => {
 
 			await Promise.all(jobs);
 			const tempCompleteService = allCompletedServices
-				?.filter((item) => item.serviceStatus === "COMPLETE")
+				?.filter((item) => item.serviceStatus === "COMPLETE" || item.serviceStatus === "DELETED")
 				?.sort((a, b) => b.completedAt - a.completedAt)
 				?.map((item) => ({
 					...item,
@@ -502,8 +585,6 @@ const ServiceReporting = () => {
 				  );
 			console.log({ matchedServices, selectedTransStatusOptions });
 			setFilteredData(matchedServices);
-			setEditedData({});
-			setEditing({ section: null, serviceId: null, consentAcceptance: false });
 			setNewContainers([]);
 			setNewDelContainers([]);
 		});
@@ -548,18 +629,6 @@ const ServiceReporting = () => {
 		}
 	}, [user]);
 
-	const handleDeliveryView = async (id, url) => {
-		console.log("id,url", { id, url });
-
-		if (url && url?.length > 0) {
-			window.open(url, "_blank");
-		} else {
-			const fetchUrl = getDeliveryUrl(id);
-			console.log("fetchUrl", fetchUrl);
-			window.open(fetchUrl, "_blank");
-		}
-	};
-
 	const handleBillingCheckbox = async (isChecked, serviceId, statusUpdateReason = "") => {
 		let docRef = doc(db, COLLECTIONS.scheduledServices, serviceId);
 		console.log({ isChecked, serviceId, statusUpdateReason });
@@ -597,7 +666,7 @@ const ServiceReporting = () => {
 		console.log({ isChecked, serviceId, statusUpdateReason });
 
 		let toUpdate = {
-			paid: isChecked,
+			paid: isChecked ? true : false,
 			paidDate: isChecked ? Timestamp.now() : null,
 			billingNote: isChecked ? "Payment recorded." : statusUpdateReason,
 		};
@@ -611,6 +680,36 @@ const ServiceReporting = () => {
 								...service,
 								...toUpdate,
 								paidDate: isChecked ? Timestamp.now()?.toDate()?.toLocaleDateString() : null,
+						  }
+						: service
+				)
+			);
+
+			toast.success(isChecked ? "Payment marked as complete!" : "Payment status updated.");
+		} catch (error) {
+			console.error("Error updating payment status:", error);
+			toast.error("Failed to update payment status.");
+		}
+	};
+	const handleApprovedCheckbox = async (isChecked, serviceId, statusUpdateReason = "") => {
+		let docRef = doc(db, COLLECTIONS.scheduledServices, serviceId);
+		console.log({ isChecked, serviceId, statusUpdateReason });
+
+		let toUpdate = {
+			approved: isChecked,
+			approvedDate: isChecked ? Timestamp.now() : null,
+			approvedNote: isChecked ? "Service approved." : statusUpdateReason,
+		};
+
+		try {
+			await updateDoc(docRef, toUpdate);
+			setCompleteServices((prevServices) =>
+				prevServices.map((service) =>
+					service.id === serviceId
+						? {
+								...service,
+								...toUpdate,
+								approvedDate: isChecked ? Timestamp.now()?.toDate()?.toLocaleDateString() : null,
 						  }
 						: service
 				)
@@ -641,24 +740,31 @@ const ServiceReporting = () => {
 		setEditing({ serviceId, section, consentAcceptance: false });
 		const service = JSON.parse(JSON.stringify(filteredData.find((s) => s.id === serviceId)));
 		setEditedData({
-			serviceSummary: [...service.serviceSummary],
+			serviceSummary: sortedServiceSummary([...service.serviceSummary]),
 			deliverySummary: [...service.deliverySummary],
 		});
 		setNewContainers([]);
 		setNewDelContainers([]);
 	};
 
-	const handleFieldChange = (serviceId, section, index, field, value) => {
-		const newData = [...editedData[section]];
-		newData[index][field] = value;
+	const handleFieldChange = (serviceId, section, index, field, value, containerId) => {
+		console.log({ serviceId, section, index, field, value, containerId });
+		const newData = [...editedData[section]].map((item) => {
+			if (item.id === containerId) {
+				return { ...item, [field]: value };
+			} else if (item.tempId === containerId) {
+				return { ...item, [field]: value };
+			}
+			return item;
+		});
 		setEditedData((prev) => ({ ...prev, [section]: newData }));
 	};
 
-	const handleSubWasteTypeChange = async (serviceId, section, index, field, value) => {
+	const handleSubWasteTypeChange = async (serviceId, section, index, field, value, group) => {
 		const newData = [...editedData[section]];
 		newData[index][field] = value;
 		let resp = await fetchContainerData(value);
-		console.log({ field, value, resp });
+		console.log({ field, value, resp, group, containersMap, containerPriceBook });
 		newData[index]["subWasteType"] = resp.subWasteType;
 		setEditedData((prev) => ({ ...prev, [section]: newData }));
 	};
@@ -713,9 +819,15 @@ const ServiceReporting = () => {
 						.filter((item) => item._source === "itemized")
 						.map(({ _source, _index, ...rest }) => rest),
 				};
+
+				let newContainerss = [];
+
 				await Promise.all(
 					editedData.serviceSummary.map(async (item) => {
-						if (!item.id) return;
+						if (!item.id) {
+							newContainerss.push(item);
+							return;
+						}
 						const containerRef = doc(db, COLLECTIONS.servicedContainers, item.id);
 						const containerDoc = await getDoc(containerRef);
 						const containerData = containerDoc.data();
@@ -734,8 +846,10 @@ const ServiceReporting = () => {
 						}
 					})
 				);
+
+				console.log({ newContainerss });
 				// Processing NEW containers
-				for (const newContainer of newContainers) {
+				for (const newContainer of newContainerss) {
 					const containerRef = doc(collection(db, COLLECTIONS.servicedContainers));
 					newContainerIds.push(containerRef.id);
 					batch.set(containerRef, {
@@ -767,7 +881,7 @@ const ServiceReporting = () => {
 					}
 				});
 				// Add/update for new manifests
-				const sampleManifest = service.manifestData[0];
+				const sampleManifest = service.manifestData?.[0];
 				Object.entries(subWasteGroups).forEach(([newSWT, containerIds]) => {
 					const existingManifest = service.manifestData.find((m) => m.subWasteType === newSWT);
 					if (existingManifest) {
@@ -815,7 +929,7 @@ const ServiceReporting = () => {
 				];
 				serviceUpdate.consolidated = [
 					...serviceUpdate.consolidated,
-					...newContainers.map((c) => ({
+					...newContainerss.map((c) => ({
 						...c,
 						id: newContainerIds.shift(),
 						_source: "consolidated",
@@ -839,18 +953,20 @@ const ServiceReporting = () => {
 								}
 								return m;
 							}),
-							...newManifests.filter((nm) => !s.manifestData.some((m) => m.subWasteType === nm.subWasteType)), // Prevents adding new manifests that already exist
+							...newManifests.filter((nm) => !s.manifestData.some((m) => m.subWasteType === nm.subWasteType)),
 						];
 						return {
 							...s,
 							serviceSummary: [
-								...editedData.serviceSummary,
-								...newContainers.map((c) => ({
+								// Remove new ones (no id) from editedData
+								...editedData.serviceSummary.filter((item) => item.id),
+								...newContainerss.map((c) => ({
 									...c,
 									id: newContainerIds.shift(),
 									_source: "consolidated",
 								})),
 							],
+
 							manifestData: updatedManifests.filter((m) => m.containers?.length > 0),
 						};
 					})
@@ -859,6 +975,8 @@ const ServiceReporting = () => {
 				setFilteredData((prev) =>
 					prev.map((s) => (s.id === serviceId ? completeServices.find((cs) => cs.id === serviceId) : s))
 				);
+
+				// return;
 			}
 
 			if (editing.section === "delivery") {
@@ -1078,16 +1196,16 @@ const ServiceReporting = () => {
 	};
 
 	const handleAddNewContainer = async (serviceId) => {
-		setNewContainers([
-			...newContainers,
-			{
-				tempId: Date.now(),
-				subWasteType: "",
-				containerType: "",
-				quantity: 1,
-				weight: 0,
-			},
-		]);
+		setNewContainerData({
+			subWasteType: "",
+			containerType: "",
+			quantity: 1,
+			weight: 0,
+			rate: 0,
+			total: 0,
+			cost: 0,
+		});
+		setShowAddContainerModal(true);
 	};
 
 	const handleAddNewDelContainer = async (serviceId) => {
@@ -1115,10 +1233,17 @@ const ServiceReporting = () => {
 	};
 
 	const handleNewSubWasteTypeChange = async (tempId, field, value) => {
-		let resp = await fetchContainerData(value);
-		setNewContainers(
-			newContainers.map((container) =>
-				container.tempId === tempId ? { ...container, [field]: value, subWasteType: resp.subWasteType } : container
+		const containerData = await fetchContainerData(value);
+		setNewContainers((prev) =>
+			prev.map((container) =>
+				container.tempId === tempId
+					? {
+							...container,
+							[field]: value,
+							subWasteType: containerData?.subWasteType,
+							rate: containerData?.rate || 0,
+					  }
+					: container
 			)
 		);
 	};
@@ -1138,7 +1263,25 @@ const ServiceReporting = () => {
 			return;
 		}
 
-		console.log("Deleting ", { serviceId, containerId, editedData, editing });
+		console.log("Deleting ", {
+			serviceId,
+			containerId,
+			editedData,
+			editing,
+			toDeleteService: toDeleteService?.serviceSummary,
+		});
+
+		// Find the container to delete
+		let container = toDeleteService?.serviceSummary?.find((item) => item.id === containerId);
+
+		if (!container) {
+			setEditedData((prev) => ({
+				...prev,
+				serviceSummary: prev.serviceSummary.filter((item) => item.tempId !== containerId),
+			}));
+			setIsDeleting(null);
+			return;
+		}
 
 		try {
 			toast.loading("Deleting container...");
@@ -1242,7 +1385,7 @@ const ServiceReporting = () => {
 					if (!prev?.serviceSummary) return prev;
 					let newServiceSummary = prev.serviceSummary.filter((item) => item.id !== containerId);
 					console.log("Updated editedData:", { ...prev, serviceSummary: newServiceSummary });
-					return { ...prev, serviceSummary: newServiceSummary };
+					return { ...prev, serviceSummary: sortedServiceSummary(newServiceSummary) };
 				});
 
 				toast.dismiss();
@@ -1336,6 +1479,55 @@ const ServiceReporting = () => {
 	console.log({ completeServices, containersMap, filteredData, editedData });
 	console.log("====================================");
 
+	const groupContainers = (containers, manifests) => {
+		return containers.reduce((groups, container) => {
+			const key = container.subWasteType;
+			if (!groups[key]) {
+				groups[key] = {
+					containers: [],
+					manifest: manifests.find((m) => m.subWasteType === key) || {},
+					subtotal: { quantity: 0, weight: 0, total: 0 },
+				};
+			}
+			groups[key].containers.push(container);
+			groups[key].subtotal.quantity += Number(container.quantity);
+			groups[key].subtotal.weight += Number(container.weight);
+			groups[key].subtotal.total += Number(container.quantity) * Number(container.rate);
+			return groups;
+		}, {});
+	};
+
+	let respGrouped = groupContainers(filteredData[0]?.serviceSummary || [], filteredData[0]?.manifestData || []);
+
+	console.log({ respGrouped });
+
+	const handleFieldChangeOrNewContainer = (type, container, field, value) => {
+		if (type === "edit") {
+			const index = editedData.serviceSummary.findIndex((c) => c.id === container.id);
+			handleFieldChange(editing.serviceId, "serviceSummary", index, field, value);
+		} else {
+			setNewContainers((prev) => prev.map((c) => (c.tempId === container.tempId ? { ...c, [field]: value } : c)));
+		}
+	};
+
+	const calculateContainerTotal = (container, priceData) => {
+		if (!priceData) return 0;
+
+		const quantity = Number(container.quantity) || 0;
+		const weight = Number(container.weight) || 0;
+		const tareWeight = Number(priceData.tareWeight) || 0;
+		const pricePerPound = Number(priceData.pricePerPound) || 0;
+		const subFlatFee = Number(priceData.subFlatFee) || 0;
+
+		if (priceData.chargePerPound) {
+			const netWeight = Math.max(weight - tareWeight * quantity, 0);
+			return netWeight * pricePerPound;
+		}
+		return subFlatFee * quantity;
+	};
+
+	console.log({ newContainerData, newContainers });
+
 	return (
 		<div
 			style={{ height: selectedRows.length > 0 ? `calc(100% - 60px)` : "100%" }}
@@ -1366,6 +1558,7 @@ const ServiceReporting = () => {
 					setSubContractorOptions={setSubContractorOptions}
 					selectedTransStatusOptions={selectedTransStatusOptions}
 					setSelectedTransStatusOptions={setSelectedTransStatusOptions}
+					setDateFilterManuallyChanged={setDateFilterManuallyChanged}
 				/>
 			</div>
 			<div className={`flex flex-col w-full font-medium overflow-y-scroll`}>
@@ -1408,7 +1601,7 @@ const ServiceReporting = () => {
 									transporterData={transporterData}
 								/>
 								<div className="flex w-full overflow-hidden gap-6 border-dashInActiveBtnText px-6 pl-10">
-									<div className="w-[45%] border border-dashInActiveBtnText rounded-lg overflow-hidden">
+									<div className="w-[55%] border border-dashInActiveBtnText overflow-hidden">
 										<div className="bg-[#DADADA] h-14 py-1 items-start justify-center">
 											<div className="w-full flex items-center justify-center gap-2">
 												<h6 className="font-medium text-center">Service Summary</h6>
@@ -1441,9 +1634,9 @@ const ServiceReporting = () => {
 													</button>
 												)}
 											</div>
-											{service?.manifestData?.length > 0 && <ManifestMapper service={service} />}
+											{/* {service?.manifestData?.length > 0 && <ManifestMapper service={service} />} */}
 										</div>
-										<div className="pl-4 pb-2">
+										<div className="px-4 pb-2">
 											<>
 												{service.serviceSummary?.length == 0 &&
 													service.noWaste &&
@@ -1454,209 +1647,203 @@ const ServiceReporting = () => {
 													))}
 											</>
 											{service.serviceSummary?.length > 0 && (
-												<div className="grid grid-cols-5 gap-2 text-left py-2 font-medium">
-													<p>Subwaste Type</p>
-													<p>Container</p>
-													<p>Quantity</p>
-													<p>Weight</p>
-													{editing.serviceId === service.id && editing.section === "service" && <p>Delete</p>}
+												<div className="flex gap-2 text-left py-2 font-medium">
+													<p className="w-[20%]">Subwaste Type</p>
+													<p className="w-[30%]">Container</p>
+													<p className="w-[8%]">Qty</p>
+													<p className="w-[10%]">Weight</p>
+													<p className="w-[8%]">Rate</p>
+													<p className="w-[8%]">Total</p>
+													<p className="w-[8%]">Cost</p>
+													<p className="w-[8%]">
+														{editing.serviceId === service.id && editing.section === "service" && "Delete"}
+													</p>
 												</div>
 											)}
-											{Array.isArray(service?.serviceSummary) ? (
-												service.serviceSummary?.map((summary, idx) => (
-													<div key={idx} className="grid grid-cols-5 gap-2 my-1 text-left">
-														{editing.serviceId === service.id && editing.section === "service" ? (
-															<>
-																{/* Subwaste Type Dropdown */}
-																<select
-																	value={editedData.serviceSummary[idx].subWasteType}
-																	onChange={(e) =>
-																		handleFieldChange(service.id, "serviceSummary", idx, "subWasteType", e.target.value)
-																	}
-																	disabled={true}
-																	className="border rounded p-0.5 px-1 disabled:border-none"
-																>
-																	<option value="" disabled hidden></option>
-																	{Object.entries(subWasteTypesMap).map(([value, label]) => (
-																		<option key={label} value={label}>
-																			{label}
-																		</option>
-																	))}
-																</select>
-																{/* Container Type Dropdown */}
-																<select
-																	value={editedData.serviceSummary[idx].containerType}
-																	onChange={(e) =>
-																		handleSubWasteTypeChange(
-																			service.id,
-																			"serviceSummary",
-																			idx,
-																			"containerType",
-																			e.target.value
-																		)
-																	}
-																	className="border rounded p-0.5 px-1"
-																>
-																	<option value="" disabled hidden></option>
-																	{Object.entries(containersMap).map(([value, label]) => (
-																		<option key={value} value={value}>
-																			{label}
-																		</option>
-																	))}
-																</select>
-																{/* Quantity Input */}
-																<input
-																	className="border-b focus:outline-none px-1 w-16"
-																	value={
-																		editedData.serviceSummary[idx].quantity
-																			? Number(editedData.serviceSummary[idx].quantity)
-																			: 1
-																	}
-																	type="number"
-																	min={1}
-																	onChange={(e) =>
-																		handleFieldChange(
-																			service.id,
-																			"serviceSummary",
-																			idx,
-																			"quantity",
-																			e.target.value ? e.target.value?.toString() : "1"
-																		)
-																	}
-																	onKeyDown={(e) => {
-																		if (e.key === "." || e.key === "e") {
-																			e.preventDefault();
-																		}
-																	}}
-																/>
-																{/* Weight Input */}
-																<input
-																	className="border-b focus:outline-none px-1 w-16"
-																	value={
-																		editedData.serviceSummary[idx].weight
-																			? Number(editedData.serviceSummary[idx].weight)
-																			: 0
-																	}
-																	type="number"
-																	min={0}
-																	onChange={(e) =>
-																		handleFieldChange(
-																			service.id,
-																			"serviceSummary",
-																			idx,
-																			"weight",
-																			e.target.value ? e.target.value?.toString() : "0"
-																		)
-																	}
-																/>
-																{editing.serviceId === service.id && editing.section === "service" && (
-																	<button
-																		onClick={() => {
-																			console.log({ summary });
-																			setIsDeleting({
-																				serviceId: service.id,
-																				containerId: summary.id,
-																				section: "service",
-																			});
-																		}}
-																		className="text-red-500 hover:text-red-700"
-																	>
-																		<BiTrash className="w-4 h-4" />
-																	</button>
-																)}
-															</>
-														) : (
-															<>
-																<p className="p-0.5 px-1">
-																	{subWasteTypesMap[summary.subWasteType] ?? summary.subWasteType ?? "--"}
-																</p>
-																<p className="p-0.5 px-1">{containersMap[summary.containerType] ?? "--"}</p>
-																<p className="p-0.5 px-1">{summary.quantity}</p>
-																<p className="p-0.5 px-1">{summary.weight}</p>
-															</>
-														)}
-													</div>
-												))
-											) : (
-												<div className="w-full text-center py-2 text-secondary">
-													<p>No data found</p>
-												</div>
-											)}
-											{editing.serviceId === service.id &&
-												editing.section === "service" &&
-												newContainers.map((container, idx) => (
-													<div
-														key={container.tempId}
-														className="grid grid-cols-5 gap-2 h-7 my-1 text-left items-center"
-													>
-														<select
-															value={container.subWasteType}
-															onChange={(e) =>
-																handleNewContainerChange(container.tempId, "subWasteType", e.target.value)
-															}
-															disabled={true}
-															className="border rounded p-0.5 px-1 disabled:border-none"
-														>
-															<option value="" disabled hidden></option>
-															{Object.entries(subWasteTypesMap).map(([value, label]) => (
-																<option key={label} value={label}>
-																	{label}
-																</option>
-															))}
-														</select>
-														<select
-															value={container.containerType}
-															onChange={(e) =>
-																handleNewSubWasteTypeChange(container.tempId, "containerType", e.target.value)
-															}
-															className="border rounded p-0.5 px-1"
-														>
-															<option value="" disabled hidden></option>
-															{Object.entries(containersMap).map(([value, label]) => (
-																<option key={value} value={value}>
-																	{label}
-																</option>
-															))}
-														</select>
-														<input
-															value={container.quantity ? Number(container.quantity) : 1}
-															type="number"
-															min={1}
-															onChange={(e) =>
-																handleNewContainerChange(
-																	container.tempId,
-																	"quantity",
-																	e.target.value ? e.target.value?.toString() : "1"
-																)
-															}
-															className="border-b focus:outline-none px-1 w-16"
-															onKeyDown={(e) => {
-																if (e.key === "." || e.key === "e") {
-																	e.preventDefault();
-																}
-															}}
-														/>
-														<input
-															value={container.weight ? Number(container.weight) : 0}
-															type="number"
-															min={0}
-															onChange={(e) =>
-																handleNewContainerChange(
-																	container.tempId,
-																	"weight",
-																	e.target.value ? e.target.value?.toString() : "0"
-																)
-															}
-															className="border-b focus:outline-none px-1 w-16"
-														/>
+											{Object.entries(
+												groupContainers(
+													editing.serviceId === service.id && editing.section === "service"
+														? [...editedData.serviceSummary]
+														: service.serviceSummary,
+													service.manifestData
+												)
+											).map(([subWasteType, group], i, arr) => {
+												let groupTotal = 0;
+												const subtotal = group.containers.reduce(
+													(acc, container) => {
+														const quantity = Number(container.quantity) || 0;
+														const weight = Number(container.weight) || 0;
+														const rate = Number(container.priceBookData?.rate) || 0;
+
+														return {
+															quantity: acc.quantity + quantity,
+															weight: acc.weight + weight,
+															total: acc.total + quantity * rate,
+															cost: acc.cost + weight * rate,
+														};
+													},
+													{ quantity: 0, weight: 0, total: 0, cost: 0 }
+												);
+
+												return (
+													<div key={subWasteType} className={`${i < arr.length - 1 ? "border-b border-black/40" : ""}`}>
 														<button
-															onClick={() => handleRemoveNewContainer(container.tempId)}
-															className="text-red-500 hover:text-red-700"
+															className="text-left text-primary hover:underline"
+															onClick={() => handleManifestView(group?.manifest?.id, group.manifest?.url)}
 														>
-															<BiTrash className="w-4 h-4" />
+															{group?.manifest?.manifestOctoId || ""}
 														</button>
+
+														{group.containers.map((summary, idx) => {
+															const rate = Number(summary.priceBookData?.pricePerPound) || 0;
+															const total = (Number(summary.quantity) || 0) * rate;
+															const cost = (Number(summary.weight) || 0) * rate;
+
+															const containerTotal =
+																Number(summary.quantity) *
+																Number(summary.weight) *
+																Number(summary.priceBookData?.pricePerPound);
+															groupTotal += containerTotal;
+
+															return (
+																<div
+																	key={summary.id || summary.tempId}
+																	className="flex items-center gap-2 my-1 text-left"
+																>
+																	{editing.serviceId === service.id && editing.section === "service" ? (
+																		<>
+																			{/* Subwaste Type */}
+																			<div className="w-[20%]">
+																				{subWasteTypesMap[summary.subWasteType] || summary.subWasteType}
+																			</div>
+
+																			{/* Container Type Dropdown */}
+																			<select
+																				value={summary.containerType}
+																				onChange={(e) =>
+																					handleSubWasteTypeChange(
+																						service.id,
+																						"serviceSummary",
+																						idx,
+																						"containerType",
+																						e.target.value,
+																						subWasteType,
+																						summary.id || summary.tempId
+																					)
+																				}
+																				className="border rounded p-0.5 w-[30%] px-1"
+																			>
+																				<option value="" disabled hidden></option>
+																				{Object.entries(containerPriceBook)
+																					.filter(([value, data]) => data.subWasteType == summary.subWasteType)
+																					.map(([value, data]) => (
+																						<option key={value} value={value}>
+																							{data.labelOCTOFieldApp}
+																						</option>
+																					))}
+																			</select>
+
+																			{/* Quantity Input */}
+																			<input
+																				className="border-b focus:outline-none w-[8%] px-1"
+																				value={Number(summary.quantity)}
+																				type="number"
+																				min={1}
+																				onChange={(e) =>
+																					handleFieldChange(
+																						service.id,
+																						"serviceSummary",
+																						idx,
+																						"quantity",
+																						e.target.value,
+																						summary.id || summary.tempId
+																					)
+																				}
+																			/>
+
+																			{/* Weight Input */}
+																			<input
+																				className="border-b focus:outline-none w-[10%] px-1"
+																				value={Number(summary.weight)}
+																				type="number"
+																				min={0}
+																				onChange={(e) =>
+																					handleFieldChange(
+																						service.id,
+																						"serviceSummary",
+																						idx,
+																						"weight",
+																						e.target.value,
+																						summary.id || summary.tempId
+																					)
+																				}
+																			/>
+
+																			{/* Rate Display */}
+																			<div className="w-[8%]">${rate}</div>
+
+																			{/* Total Display */}
+																			<div className="w-[8%]">${containerTotal.toFixed(2)}</div>
+
+																			{/* Cost Display */}
+																			<div className="w-[8%]">{""}</div>
+
+																			{/* Delete Button */}
+																			<button
+																				onClick={() => {
+																					console.log({ summary });
+																					setIsDeleting({
+																						serviceId: service.id,
+																						containerId: summary.id ?? summary.tempId,
+																						section: "service",
+																					});
+																				}}
+																				className="text-red-500 w-[8%] hover:text-red-700"
+																			>
+																				<BiTrash className="w-4 h-4" />
+																			</button>
+																		</>
+																	) : (
+																		<>
+																			<p className="w-[20%]">
+																				{subWasteTypesMap[summary.subWasteType] ?? summary.subWasteType ?? "--"}
+																			</p>
+																			<p className="w-[30%]">{containersMap[summary.containerType] ?? "--"}</p>
+																			<p className="w-[8%]">{summary.quantity}</p>
+																			<p className="w-[10%]">{summary.weight}</p>
+																			<p className="w-[8%]">
+																				${Number(summary.priceBookData?.pricePerPound).toFixed(2)}
+																			</p>
+																			<p className="w-[8%]">
+																				$
+																				{(
+																					Number(summary.quantity) *
+																					Number(summary.weight) *
+																					Number(summary.priceBookData?.pricePerPound)
+																				).toFixed(2)}
+																			</p>
+																			<p className="w-[8%]"></p>
+																			<p className="w-[8%]"></p>
+																		</>
+																	)}
+																</div>
+															);
+														})}
+
+														{/* Subtotal Row */}
+														<div className="flex items-center gap-2 my-1 text-left font-semibold bg-gray-50 p-1">
+															<p className="w-[20%]">Subtotal</p>
+															<p className="w-[30%]"></p>
+															<p className="w-[8%]">{subtotal.quantity}</p>
+															<p className="w-[10%]">{subtotal.weight.toFixed(2)}</p>
+															<p className="w-[8%]"></p>
+															<p className="w-[8%]">${groupTotal.toFixed(2)}</p>
+															<p className="w-[8%]"></p>
+															<p className="w-[8%]"></p>
+														</div>
 													</div>
-												))}
+												);
+											})}
 											{editing.serviceId === service.id && editing.section === "service" && (
 												<div className="flex gap-2 mt-2">
 													<button className="text-primary text-sm" onClick={() => handleAddNewContainer(service.id)}>
@@ -1666,222 +1853,27 @@ const ServiceReporting = () => {
 											)}
 										</div>
 									</div>
-
-									<div className="w-[35%] border border-dashInActiveBtnText rounded-lg overflow-hidden">
-										<div className="bg-[#DADADA] h-14 py-1 grid items-start justify-center">
-											<div className="w-full flex items-center justify-center gap-2">
-												<h6 className="font-medium text-center">Delivery Summary</h6>
-												{editing.serviceId === service.id && editing.section === "delivery" ? (
-													<>
-														<button className="text-primary text-sm" onClick={() => handleSave(service.id)}>
-															Save
-														</button>
-														<button
-															className="text-cardTextGray text-sm"
-															onClick={() => {
-																setEditing({
-																	serviceId: null,
-																	section: null,
-																	consentAcceptance: false,
-																});
-																setNewDelContainers([]);
-																setEditedData({});
-															}}
-														>
-															Cancel
-														</button>
-													</>
-												) : (
-													<button
-														className="text-primary text-sm"
-														onClick={() => handleEditClick(service.id, "delivery")}
-													>
-														(Edit)
-													</button>
-												)}
-											</div>
-											{service?.deliverySummary?.length > 0 && service?.deliveryReceipt && (
-												<div className="flex text-sm justify-center">
-													<button
-														className="text-center mr-1 hover:underline text-primary"
-														onClick={() =>
-															handleDeliveryView(service?.deliveryReceipt?.deliveryId, service?.deliveryReceipt?.url)
-														}
-													>
-														{service?.deliveryReceipt?.deliveryOctoId ?? service?.deliveryReceipt?.deliveryId}
-													</button>
-												</div>
-											)}
-										</div>
-										<div className="px-4 pb-2">
-											<div className="flex gap-2 text-left py-2 font-medium">
-												<p className="w-[50%]">Description</p>
-												<p className="w-[30%]">Usage</p>
-												<p className="w-[20%]">Quantity</p>
-												{editing.serviceId === service.id && editing.section === "delivery" && <p>Delete</p>}
-											</div>
-											{Array.isArray(service?.deliverySummary) ? (
-												service.deliverySummary?.map((summary, idx) => (
-													<div key={idx} className="flex gap-2 my-1 text-left">
-														{editing.serviceId === service.id && editing.section === "delivery" ? (
-															<>
-																{/* Container Type Dropdown */}
-																<select
-																	value={editedData.deliverySummary[idx].containerType}
-																	onChange={(e) =>
-																		handleFieldChange(
-																			service.id,
-																			"deliverySummary",
-																			idx,
-																			"containerType",
-																			e.target.value
-																		)
-																	}
-																	className="w-[50%] max-w-[50%] border rounded p-0.5 px-1"
-																>
-																	<option value="" disabled hidden></option>
-																	{Object.entries(delContainersMap).map(([value, label]) => (
-																		<option key={value} value={value}>
-																			{label}
-																		</option>
-																	))}
-																</select>
-																{/* Usage Type Dropdown */}
-																<select
-																	value={editedData.deliverySummary[idx].type}
-																	onChange={(e) =>
-																		handleFieldChange(service.id, "deliverySummary", idx, "type", e.target.value)
-																	}
-																	className="w-[30%] max-w-[30%] border rounded p-0.5 px-1 capitalize"
-																>
-																	<option value="" disabled hidden></option>
-																	<option value="USE">Use</option>
-																	<option value="SUPPLY">Supply</option>
-																</select>
-																{/* Quantity Input */}
-																<div className="w-[15%] p-0.5">
-																	<input
-																		className="w-16 border-b focus:outline-none px-1"
-																		value={
-																			editedData.deliverySummary[idx].quantity
-																				? Number(editedData.deliverySummary[idx].quantity)
-																				: 1
-																		}
-																		type="number"
-																		min={1}
-																		onChange={(e) =>
-																			handleFieldChange(
-																				service.id,
-																				"deliverySummary",
-																				idx,
-																				"quantity",
-																				e.target.value ? e.target.value?.toString() : "1"
-																			)
-																		}
-																		onKeyDown={(e) => {
-																			if (e.key === "." || e.key === "e") {
-																				e.preventDefault();
-																			}
-																		}}
-																	/>
-																</div>
-																{editing.serviceId === service.id && editing.section === "delivery" && (
-																	<button
-																		onClick={() =>
-																			setIsDeleting({
-																				serviceId: service.id,
-																				containerId: editedData.deliverySummary[idx].id,
-																				section: "delivery",
-																			})
-																		}
-																		className="text-red-500 hover:text-red-700 w-[5%]"
-																	>
-																		<BiTrash className="w-4 h-4" />
-																	</button>
-																)}
-															</>
-														) : (
-															<>
-																<p className="w-[50%] p-0.5 px-1">{delContainersMap[summary?.containerType] ?? "--"}</p>
-																<p className="w-[30%] p-0.5 px-1 capitalize">{summary?.type ?? "--"}</p>
-																<p className="w-[15%] p-0.5 px-1.5">{summary.quantity}</p>
-																<p className="w-[5%] p-0.5 px-1.5"></p>
-															</>
-														)}
-													</div>
-												))
-											) : (
-												<div className="w-full text-center py-2 text-secondary">
-													<p>No data found</p>
-												</div>
-											)}
-											{newDelContainers.map((delContainer, idx) => (
-												<div key={delContainer.tempId} className="flex gap-2 h-7 my-1 text-left items-center">
-													<select
-														value={delContainer.containerType}
-														onChange={(e) =>
-															handleNewDelContainerChange(delContainer.tempId, "containerType", e.target.value)
-														}
-														className="w-[50%] max-w-[50%] border rounded p-0.5 px-1"
-													>
-														<option value="" disabled hidden></option>
-														{Object.entries(delContainersMap).map(([value, label]) => (
-															<option key={value} value={value}>
-																{label}
-															</option>
-														))}
-													</select>
-													{/* Usage Type Dropdown */}
-													<select
-														value={delContainer.type}
-														onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "type", e.target.value)}
-														className="w-[30%] max-w-[30%] border rounded p-0.5 px-1 capitalize"
-													>
-														<option value="" disabled hidden></option>
-														<option value="USE">Use</option>
-														<option value="SUPPLY">Supply</option>
-													</select>
-													{/* Quantity Input */}
-													<div className="w-[15%] p-0.5">
-														<input
-															className="w-16 border-b focus:outline-none px-1"
-															value={delContainer.quantity ? Number(delContainer.quantity) : 1}
-															type="number"
-															min={1}
-															onChange={(e) =>
-																handleNewDelContainerChange(
-																	delContainer.tempId,
-																	"quantity",
-																	e.target.value ? e.target.value?.toString() : "1"
-																)
-															}
-															onKeyDown={(e) => {
-																if (e.key === "." || e.key === "e") {
-																	e.preventDefault();
-																}
-															}}
-														/>
-													</div>
-													<button
-														onClick={() => handleRemoveNewDelContainer(delContainer.tempId)}
-														className="text-red-500 hover:text-red-700 w-[5%]"
-													>
-														<BiTrash className="w-4 h-4" />
-													</button>
-												</div>
-											))}
-											{editing.serviceId === service.id && editing.section === "delivery" && (
-												<div className="flex gap-2 mt-2">
-													<button className="text-primary text-sm" onClick={() => handleAddNewDelContainer(service.id)}>
-														+ Add Container
-													</button>
-												</div>
-											)}
-										</div>
-									</div>
+									<DeliverySummaryContainer
+										delContainersMap={delContainersMap}
+										editedData={editedData}
+										editing={editing}
+										handleAddNewDelContainer={handleAddNewDelContainer}
+										handleEditClick={handleEditClick}
+										handleFieldChange={handleFieldChange}
+										handleNewDelContainerChange={handleNewDelContainerChange}
+										handleRemoveNewDelContainer={handleAddNewDelContainer}
+										handleSave={handleSave}
+										newDelContainers={newDelContainers}
+										service={service}
+										setEditedData={setEditedData}
+										setEditing={setEditing}
+										setIsDeleting={setIsDeleting}
+										setNewDelContainers={setNewDelContainers}
+									/>
 									<OptionsContainer
 										handleBillingCheckbox={handleBillingCheckbox}
 										handlePaidCheckbox={handlePaidCheckbox}
+										handleApprovedCheckbox={handleApprovedCheckbox}
 										service={service}
 									/>
 								</div>
@@ -1965,12 +1957,351 @@ const ServiceReporting = () => {
 					</div>
 				</div>
 			)}
+			{showAddContainerModal && (
+				<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+					<div className="bg-white p-6 w-96">
+						<h3 className="text-lg font-bold mb-4">Add New Container</h3>
+
+						<div className="space-y-4">
+							<select
+								className="w-full p-2 border rounded"
+								value={newContainerData.subWasteType}
+								onChange={(e) =>
+									setNewContainerData((prev) => ({
+										...prev,
+										subWasteType: e.target.value,
+									}))
+								}
+							>
+								<option value="">Select Subwaste Type</option>
+								{Object.entries(subWasteTypesMap).map(([key, value]) => (
+									<option key={value} value={value}>
+										{subWasteTypesMap[key]}
+									</option>
+								))}
+							</select>
+
+							<select
+								className="w-full p-2 border rounded"
+								value={newContainerData.containerType}
+								onChange={(e) =>
+									setNewContainerData((prev) => {
+										let subWasteType = containerPriceBook[e.target.value]?.subWasteType;
+										console.log(subWasteType, containersMap, e.target.value, containerPriceBook);
+										return {
+											...prev,
+											containerType: e.target.value,
+											subWasteType,
+											priceBookData: containerPriceBook[e.target.value] || null,
+										};
+									})
+								}
+							>
+								<option value="">Select Container Type</option>
+								{Object.entries(containersMap).map(([value, label]) => (
+									<option key={value} value={value}>
+										{label}
+									</option>
+								))}
+							</select>
+
+							<input
+								type="number"
+								className="w-full p-2 border rounded"
+								placeholder="Quantity"
+								value={newContainerData.quantity}
+								onChange={(e) =>
+									setNewContainerData((prev) => ({
+										...prev,
+										quantity: e.target.value,
+									}))
+								}
+							/>
+
+							<input
+								type="number"
+								className="w-full p-2 border rounded"
+								placeholder="Weight"
+								value={newContainerData.weight}
+								onChange={(e) =>
+									setNewContainerData((prev) => ({
+										...prev,
+										weight: e.target.value,
+									}))
+								}
+							/>
+
+							{/* Add other fields as needed */}
+
+							<div className="flex justify-end space-x-2">
+								<button
+									className="px-4 py-2 text-gray-500 hover:text-gray-700"
+									onClick={() => {
+										setShowAddContainerModal(false);
+										setNewContainerData({
+											subWasteType: "",
+											containerType: "",
+											quantity: 1,
+											weight: 0,
+											rate: 0,
+											total: 0,
+											cost: 0,
+										});
+									}}
+								>
+									Cancel
+								</button>
+								<button
+									className="px-4 py-2 bg-primary text-white rounded"
+									onClick={() => {
+										setNewContainers((prev) => [
+											...prev,
+											{
+												...newContainerData,
+												tempId: Date.now(),
+											},
+										]);
+										setEditedData((prev) => ({
+											...prev,
+											serviceSummary: [
+												...prev.serviceSummary,
+												{
+													...newContainerData,
+													tempId: Date.now(),
+												},
+											],
+										}));
+										setShowAddContainerModal(false);
+									}}
+								>
+									Add Container
+								</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			)}
 			<FooterActionItems servicesSelected={selectedRows} />
 		</div>
 	);
 };
 
 export default ServiceReporting;
+
+const DeliverySummaryContainer = ({
+	editing,
+	service,
+	handleSave,
+	setEditing,
+	setNewDelContainers,
+	setEditedData,
+	handleEditClick,
+	editedData,
+	delContainersMap,
+	handleFieldChange,
+	setIsDeleting,
+	newDelContainers,
+	handleNewDelContainerChange,
+	handleAddNewDelContainer,
+	handleRemoveNewDelContainer,
+}) => {
+	return (
+		<div className="w-[35%] border border-dashInActiveBtnText overflow-hidden">
+			<div className="bg-[#DADADA] h-14 py-1 grid items-start justify-center">
+				<div className="w-full flex items-center justify-center gap-2">
+					<h6 className="font-medium text-center">Delivery Summary</h6>
+					{editing.serviceId === service.id && editing.section === "delivery" ? (
+						<>
+							<button className="text-primary text-sm" onClick={() => handleSave(service.id)}>
+								Save
+							</button>
+							<button
+								className="text-cardTextGray text-sm"
+								onClick={() => {
+									setEditing({
+										serviceId: null,
+										section: null,
+										consentAcceptance: false,
+									});
+									setNewDelContainers([]);
+									setEditedData({});
+								}}
+							>
+								Cancel
+							</button>
+						</>
+					) : (
+						<button className="text-primary text-sm" onClick={() => handleEditClick(service.id, "delivery")}>
+							(Edit)
+						</button>
+					)}
+				</div>
+			</div>
+			<div className="px-4 pb-2">
+				<div className="flex gap-2 text-left py-2 font-medium">
+					<p className="w-[50%]">Description</p>
+					<p className="w-[30%]">Usage</p>
+					<p className="w-[20%]">Quantity</p>
+					{editing.serviceId === service.id && editing.section === "delivery" && <p>Delete</p>}
+				</div>
+
+				{service?.deliverySummary?.length > 0 && service?.deliveryReceipt && (
+					<button
+						className="text-left mr-1 hover:underline text-primary"
+						onClick={() => handleDeliveryView(service?.deliveryReceipt?.deliveryId, service?.deliveryReceipt?.url)}
+					>
+						{service?.deliveryReceipt?.deliveryOctoId ?? service?.deliveryReceipt?.deliveryId}
+					</button>
+				)}
+				{Array.isArray(service?.deliverySummary) ? (
+					service.deliverySummary?.map((summary, idx) => (
+						<div key={idx} className="flex gap-2 my-1 text-left">
+							{editing.serviceId === service.id && editing.section === "delivery" ? (
+								<>
+									{/* Container Type Dropdown */}
+									<select
+										value={editedData.deliverySummary[idx].containerType}
+										onChange={(e) =>
+											handleFieldChange(service.id, "deliverySummary", idx, "containerType", e.target.value)
+										}
+										className="w-[50%] max-w-[50%] border rounded p-0.5 px-1"
+									>
+										<option value="" disabled hidden></option>
+										{Object.entries(delContainersMap).map(([value, label]) => (
+											<option key={value} value={value}>
+												{label}
+											</option>
+										))}
+									</select>
+									{/* Usage Type Dropdown */}
+									<select
+										value={editedData.deliverySummary[idx].type}
+										onChange={(e) => handleFieldChange(service.id, "deliverySummary", idx, "type", e.target.value)}
+										className="w-[30%] max-w-[30%] border rounded p-0.5 px-1 capitalize"
+									>
+										<option value="" disabled hidden></option>
+										<option value="USE">Use</option>
+										<option value="SUPPLY">Supply</option>
+									</select>
+									{/* Quantity Input */}
+									<div className="w-[15%] p-0.5">
+										<input
+											className="w-16 border-b focus:outline-none px-1"
+											value={
+												editedData.deliverySummary[idx].quantity ? Number(editedData.deliverySummary[idx].quantity) : 1
+											}
+											type="number"
+											min={1}
+											onChange={(e) =>
+												handleFieldChange(
+													service.id,
+													"deliverySummary",
+													idx,
+													"quantity",
+													e.target.value ? e.target.value?.toString() : "1"
+												)
+											}
+											onKeyDown={(e) => {
+												if (e.key === "." || e.key === "e") {
+													e.preventDefault();
+												}
+											}}
+										/>
+									</div>
+									{editing.serviceId === service.id && editing.section === "delivery" && (
+										<button
+											onClick={() =>
+												setIsDeleting({
+													serviceId: service.id,
+													containerId: editedData.deliverySummary[idx].id,
+													section: "delivery",
+												})
+											}
+											className="text-red-500 hover:text-red-700 w-[5%]"
+										>
+											<BiTrash className="w-4 h-4" />
+										</button>
+									)}
+								</>
+							) : (
+								<>
+									<p className="w-[50%] p-0.5 px-1">{delContainersMap[summary?.containerType] ?? "--"}</p>
+									<p className="w-[30%] p-0.5 px-1 capitalize">{summary?.type ?? "--"}</p>
+									<p className="w-[15%] p-0.5 px-1.5">{summary.quantity}</p>
+									<p className="w-[5%] p-0.5 px-1.5"></p>
+								</>
+							)}
+						</div>
+					))
+				) : (
+					<div className="w-full text-center py-2 text-secondary">
+						<p>No data found</p>
+					</div>
+				)}
+				{newDelContainers.map((delContainer, idx) => (
+					<div key={delContainer.tempId} className="flex gap-2 h-7 my-1 text-left items-center">
+						<select
+							value={delContainer.containerType}
+							onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "containerType", e.target.value)}
+							className="w-[50%] max-w-[50%] border rounded p-0.5 px-1"
+						>
+							<option value="" disabled hidden></option>
+							{Object.entries(delContainersMap).map(([value, label]) => (
+								<option key={value} value={value}>
+									{label}
+								</option>
+							))}
+						</select>
+						{/* Usage Type Dropdown */}
+						<select
+							value={delContainer.type}
+							onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "type", e.target.value)}
+							className="w-[30%] max-w-[30%] border rounded p-0.5 px-1 capitalize"
+						>
+							<option value="" disabled hidden></option>
+							<option value="USE">Use</option>
+							<option value="SUPPLY">Supply</option>
+						</select>
+						{/* Quantity Input */}
+						<div className="w-[15%] p-0.5">
+							<input
+								className="w-16 border-b focus:outline-none px-1"
+								value={delContainer.quantity ? Number(delContainer.quantity) : 1}
+								type="number"
+								min={1}
+								onChange={(e) =>
+									handleNewDelContainerChange(
+										delContainer.tempId,
+										"quantity",
+										e.target.value ? e.target.value?.toString() : "1"
+									)
+								}
+								onKeyDown={(e) => {
+									if (e.key === "." || e.key === "e") {
+										e.preventDefault();
+									}
+								}}
+							/>
+						</div>
+						<button
+							onClick={() => handleRemoveNewDelContainer(delContainer.tempId)}
+							className="text-red-500 hover:text-red-700 w-[5%]"
+						>
+							<BiTrash className="w-4 h-4" />
+						</button>
+					</div>
+				))}
+				{editing.serviceId === service.id && editing.section === "delivery" && (
+					<div className="flex gap-2 mt-2">
+						<button className="text-primary text-sm" onClick={() => handleAddNewDelContainer(service.id)}>
+							+ Add Container
+						</button>
+					</div>
+				)}
+			</div>
+		</div>
+	);
+};
 
 export const FooterActionItems = ({ servicesSelected, services }) => {
 	const deleteGenerators = () => {
@@ -2017,7 +2348,7 @@ export const FooterActionItems = ({ servicesSelected, services }) => {
 								actionBtn !== "Email" && actionBtn == "Delete" && actionBtn !== "Merge" && actionBtn !== "Share"
 							}
 							key={actionBtn}
-							className={`px-4 py-2 rounded-lg disabled:bg-cardTextGray disabled:bg-opacity-10 disabled:cursor-not-allowed bg-creamWhite hover:bg-cardTextGray hover:bg-opacity-10 border transition-colors duration-200 ease-in-out`}
+							className={`px-4 py-2 disabled:bg-cardTextGray disabled:bg-opacity-10 disabled:cursor-not-allowed bg-creamWhite hover:bg-cardTextGray hover:bg-opacity-10 border transition-colors duration-200 ease-in-out`}
 							onClick={() => clickHandler(actionBtn)}
 						>
 							{actionBtn}
@@ -2111,7 +2442,7 @@ const ExportComponent = ({ genSelected, generators }) => {
 			<button
 				onClick={handleExport}
 				disabled={isExporting}
-				className={`px-4 py-2 rounded-lg disabled:bg-cardTextGray disabled:bg-opacity-10 
+				className={`px-4 py-2 disabled:bg-cardTextGray disabled:bg-opacity-10 
 			disabled:cursor-not-allowed bg-creamWhite hover:bg-cardTextGray hover:bg-opacity-10 
 			border transition-colors duration-200 ease-in-out`}
 			>
@@ -2144,6 +2475,7 @@ const FilterComp = ({
 	setSubContractorOptions,
 	selectedTransStatusOptions,
 	setSelectedTransStatusOptions,
+	setDateFilterManuallyChanged
 }) => {
 	const clearFilters = () => {
 		setSearchQuery("");
@@ -2175,15 +2507,24 @@ const FilterComp = ({
 					<div className="flex flex-col min-w-52">
 						<p className="text-sm text-gray-500 px-2">From</p>
 						<CustomDatePicker
-							selectedDate={from}
-							setSelectedDate={(value) => setFrom(new Date(value))}
-							label={"From Date"}
-						/>
+  selectedDate={from}
+  setSelectedDate={(value) => {
+    setFrom(new Date(value));
+   // setDateFilterManuallyChanged(true);
+  }}
+
+  label={"From Date"}
+/>
 					</div>
 					<div className="flex flex-col min-w-52">
 						<p className="text-sm text-gray-500 px-2">To</p>
-						<CustomDatePicker selectedDate={to} setSelectedDate={(value) => setTo(new Date(value))} label={"To Date"} />
-					</div>
+						<CustomDatePicker
+  selectedDate={to}
+  setSelectedDate={(value) => {
+    setTo(new Date(value));
+  }}
+  label={"To Date"}
+/>					</div>
 					<MultiselectDropdown
 						width="w-48"
 						buttonText="Service Type"
@@ -2228,122 +2569,6 @@ const FilterComp = ({
 					/>
 				</div>
 			</div>
-		</>
-	);
-};
-
-const OptionsContainer = ({ service, handleBillingCheckbox, handlePaidCheckbox }) => {
-	const [isChanging, setIsChanging] = useState(false);
-	const [statusUpdateReason, setStatusUpdateReason] = useState("");
-	const [pendingChange, setPendingChange] = useState(null);
-
-	const handleCheckboxChange = (type, checked) => {
-		if (!checked) {
-			setIsChanging(true);
-			setPendingChange(type);
-		} else {
-			type === "Billed" ? handleBillingCheckbox(checked, service.id) : handlePaidCheckbox(checked, service.id);
-		}
-	};
-
-	const confirmChange = () => {
-		if (!statusUpdateReason.trim()) {
-			toast.error("Please enter a reason for the status update.");
-			return;
-		}
-		if (pendingChange === "Billed") {
-			handleBillingCheckbox(false, service.id, statusUpdateReason);
-		} else if (pendingChange === "Paid") {
-			handlePaidCheckbox(false, service.id, statusUpdateReason);
-		}
-		setIsChanging(false);
-		setStatusUpdateReason("");
-		setPendingChange(null);
-	};
-
-	return (
-		<>
-			<div className="flex flex-col h-fit overflow-hidden justify-between w-[20%] border border-dashInActiveBtnText rounded-lg">
-				<div className="">
-					<div className="bg-[#DADADA] h-14 py-1 grid items-start justify-center">
-						<h6 className="font-medium text-center">Options</h6>
-					</div>
-					<div className="flex flex-col gap-2 py-2">
-						<div className="flex justify-around items-center text-center font-medium">
-							<p className="w-1/3">Billed</p>
-							<span className="w-1/3">
-								<input
-									type="checkbox"
-									className="w-4 h-4 bg-white"
-									checked={service.billed}
-									disabled={service?.paid}
-									onChange={(e) => handleCheckboxChange("Billed", e.target.checked)}
-								/>
-							</span>
-							<p className="w-1/3">{service?.billedDate}</p>
-						</div>
-						{service?.billingMethod === "internal" && (
-							<div className="flex justify-around items-center text-center font-medium">
-								<p className="w-1/3">Paid</p>
-								<span className="w-1/3">
-									<input
-										type="checkbox"
-										className="w-4 h-4 bg-white"
-										checked={service?.paid}
-										onChange={(e) => handleCheckboxChange("Paid", e.target.checked)}
-									/>
-								</span>
-								<p className="w-1/3">{service?.paidDate}</p>
-							</div>
-						)}
-					</div>
-				</div>
-				<div
-					className={`w-full flex min-h-10 max-h-10 items-center justify-center border-t font-medium border-[#DADADA] ${
-						service?.billingMethod === "internal" ? " bg-primaryGreen" : "text-red-600"
-					}`}
-				>
-					<p>{service?.billingNote}</p>
-				</div>
-			</div>
-
-			{isChanging && (
-				<div className="z-40 fixed inset-0 bg-[#CCCCCC87] bg-opacity-50 flex justify-center items-center">
-					<div className="modal-box">
-						<button
-							className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-							type="button"
-							onClick={() => setIsChanging(false)}
-						>
-							✕
-						</button>
-						<h3 className="font-bold text-lg">Are you sure?</h3>
-						<p className="py-5">
-							By unchecking this box, you are changing the status of <strong>{pendingChange}</strong>.
-						</p>
-						<div className="py-5">
-							<label htmlFor="updateReason">
-								<p>Enter reason for this change *</p>
-								<textarea
-									rows={3}
-									name="updateReason"
-									value={statusUpdateReason}
-									onChange={(e) => setStatusUpdateReason(e.target.value)}
-									className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
-								/>
-							</label>
-						</div>
-						<div className="flex w-full justify-between">
-							<button className="btn btn-error btn-sm" type="button" onClick={confirmChange}>
-								Yes
-							</button>
-							<button className="btn btn-primary btn-sm" type="button" onClick={() => setIsChanging(false)}>
-								No
-							</button>
-						</div>
-					</div>
-				</div>
-			)}
 		</>
 	);
 };
@@ -2414,18 +2639,6 @@ const DataTable = ({ service, selectedRows, handleRowCheckbox, transporterData }
 };
 
 const ManifestMapper = ({ service }) => {
-	const handleManifestView = async (id, url) => {
-		console.log({ id, url });
-
-		if (url && url?.length > 0) {
-			window.open(url, "_blank");
-		} else {
-			const fetchUrl = getManifestUrl(id);
-			console.log("fetchUrl", fetchUrl);
-			window.open(fetchUrl, "_blank");
-		}
-	};
-
 	return (
 		<div className="flex text-sm justify-center">
 			<span>
