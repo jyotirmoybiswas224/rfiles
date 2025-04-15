@@ -370,12 +370,12 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		tempSchedules.sort((a, b) => {
 			let dateA = null;
 			let dateB = null;
-			if (typeof a.createdAt.seconds === "number" || typeof a.createdAt.nanoseconds === "number") {
+			if (typeof a?.createdAt?.seconds === "number" || typeof a?.createdAt?.nanoseconds === "number") {
 				dateA = new Timestamp(a.createdAt.seconds, a.createdAt.nanoseconds).toDate();
 			} else {
 				dateA = a.createdAt.toDate();
 			}
-			if (typeof b.createdAt.seconds === "number" || typeof b.createdAt.nanoseconds === "number") {
+			if (typeof b?.createdAt?.seconds === "number" || typeof b?.createdAt?.nanoseconds === "number") {
 				dateB = new Timestamp(b.createdAt.seconds, b.createdAt.nanoseconds).toDate();
 			} else {
 				dateB = b.createdAt.toDate();
@@ -399,7 +399,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				where("generatorId", "==", generatorData.id),
 				where("status", "!=", SERVICE_STATUS.DELETED),
 				orderBy("date", "asc"),
-				limit(30)
+				limit(100)
 			),
 			async (snap) => {
 				try {
@@ -854,8 +854,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	//     document.removeEventListener("mousedown", handleClickOutside);
 	//   };
 	// }, [showSSRFrom]);
-	// Add this effect in your component
-
 
 	const renderSSRButton = () => {
 		let isDisable = false;
@@ -943,7 +941,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		};
 
 		const formData = getFormData();
-		
 
 		return (
 			<div className="pb-4">
@@ -1076,40 +1073,25 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					</div>
 
 					<div className="w-1/2 space-y-4">
-						
-						<Controller
-									name={`serviceSchedules.serviceType`}
-									control={control}
-									rules={{ required: "Service Type is required." }}
-									render={({ field: { onChange, value } }) => (
-										<Dropdown
-											label="Service Type"
-											id={`service-input`}
-											options={serviceTypes.map((item) => {
-												if (item.value === "HAZARDOUS_WASTE") {
-													return {
-														label: "Hazardous Waste",
-														value: null,
-														isDisabled: true,
-													};
-												}
-												return {
-													label: item.label,
-													value: item.value,
-												};
-											})}
-											value={value}
-											onChange={(e) => {
-												onChange(e);
-												trigger(`serviceSchedules.serviceType`, { shouldFocus: true });
-											}}
-											isRequired={true}
-											disabledBgColor="white"
-											disabledTextColor="gray-300"
-											isDisabled={isReadOnly}
-										/>
-									)}
-								/>
+						<Dropdown
+							label="Service Type"
+							options={serviceTypes.map((item) => ({
+								label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
+								value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
+								isDisabled: item.value === "HAZARDOUS_WASTE",
+							}))}
+							disabledBgColor="white"
+							disabledTextColor="gray-300"
+							value={formData.serviceType}
+							onChange={(e) => {
+								if (!isReadOnly) {
+									setValue("serviceSchedules.serviceType", e);
+									trigger("serviceSchedules.serviceType");
+								}
+							}}
+							isRequired
+							isDisabled={isReadOnly}
+						/>
 						{!isReadOnly && errors.serviceSchedules?.serviceType && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
 						)}
@@ -1132,25 +1114,33 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						)}
 
 						<div>
-						<MultiSelectRounded
-  label="Expected Container"
-  options={groupContainersBySubWasteType(
-    itemsOptions.filter((item) =>
-      formData.serviceType === SERVICE_TYPES.MEDICAL_WASTE
-        ? item.subWasteType !== "Paper Shredding"
-        : item.subWasteType === "Paper Shredding"
-    )
-  )}
-  value={formData.expectedItemOrService}
-  onChange={(selected) => {
-    if (!isReadOnly) {
-      setValue("serviceSchedules.expectedItemOrService", selected);
-      trigger("serviceSchedules.expectedItemOrService");
-    }
-  }}
-  isRequired
-  isDisabled={isReadOnly}
-/>
+							<MultiSelectRounded
+								isDisabled={isReadOnly || (!isReadOnly && !formValues.serviceSchedules?.serviceType)}
+								value={formData.expectedItemOrService.map((v) => v.item)}
+								onChange={(selectedItems) => {
+									if (!isReadOnly) {
+										const transformedItems = selectedItems.map((item) => {
+											const existingItem = formData.expectedItemOrService.find((v) => v.item === item);
+											return {
+												item,
+												quantity: existingItem?.quantity ?? 1,
+											};
+										});
+										setValue("serviceSchedules.expectedItemOrService", transformedItems);
+										trigger("serviceSchedules.expectedItemOrService");
+									}
+								}}
+								options={groupContainersBySubWasteType(
+									itemsOptions.filter((item) =>
+									  formData.serviceType === SERVICE_TYPES.MEDICAL_WASTE
+										? item.subWasteType !== "Paper Shredding"
+										: item.subWasteType === "Paper Shredding"
+									)
+								  )}								
+							    isRequired
+								label="Expected Container(s)"
+								className="text-inputLabel"
+							/>
 
 							{!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
 								<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
@@ -1506,7 +1496,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				status: "Pending",
 				createdAt: new Date().toISOString(),
 				timeStamp: new Date(),
-				id: Date.now().toString(),
+				ssrId: Date.now().toString(),
 				transporterName: transporterData.companyName,
 			};
 
@@ -1543,7 +1533,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				setActiveSentSSRs((prev) => [serviceRequest, ...prev]);
 
 				//setSuccessMessage("Request successfully sent to the subcontractor!");
-                showSuccessToastMessage(`Subcontractor Service Request sent to ${formData.selectedSubContractor.Cname} Successfully!`)
+				showSuccessToastMessage(
+					`Subcontractor Service Request sent to ${formData.selectedSubContractor.Cname} Successfully!`
+				);
 				setTimeout(() => {
 					setSuccessMessage("");
 					resetFormForNewSSR();
