@@ -275,6 +275,9 @@ const ServiceReporting = () => {
 	const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
 	const [hasMore, setHasMore] = useState(false);
 	const [unsubscribeServices, setUnsubscribeServices] = useState(null);
+// Add this with your other state declarations
+const [isSearchingByOctoNumber, setIsSearchingByOctoNumber] = useState(false);
+const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 
 	// Load once during component mount or on page load
 	const loadContainerPriceBook = async () => {
@@ -298,11 +301,20 @@ const ServiceReporting = () => {
 
 	useEffect(() => {
 		if (genOctoNumber) {
-			console.log("genOctonumber", genOctoNumber);
-			setSearchQuery(genOctoNumber);
-			// viewButtonHandler(gen);
+		  console.log("genOctonumber", genOctoNumber);
+		  setSearchQuery(genOctoNumber);
+		  setIsInitialOctoSearch(true);
+		  
+		  // Set very wide date range to include all services
+		  const pastDate = new Date();
+		  pastDate.setFullYear(pastDate.getFullYear() - 5); // Go back 5 years
+		  setFrom(pastDate);
+		  
+		  const futureDate = new Date();
+		  futureDate.setFullYear(futureDate.getFullYear() + 1); // Go forward 1 year
+		  setTo(futureDate);
 		}
-	}, [genOctoNumber]);
+	  }, [genOctoNumber]);
 
 	const fetchAllDriverOptions = async () => {
 		try {
@@ -817,20 +829,25 @@ const ServiceReporting = () => {
 	]);
 
 	const processDateWise = (item) => {
+		// If it's the initial octo search, don't filter by date at all
+		if (isInitialOctoSearch) {
+		  return true; // Show all services regardless of date
+		}
+	  
 		let date = item.date?.toDate();
 		let today = new Date();
 		let todayD = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
 		let dateF = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-
+	  
 		console.log({ todayD, dateF });
-
+	  
 		if (dateF >= todayD) {
-			if (item.completedAt) return true;
-			else return false;
+		  if (item.completedAt) return true;
+		  else return false;
 		} else {
-			return true;
+		  return true;
 		}
-	};
+	  };
 
 	const fetchAllRoutesOptions = async () => {
 		try {
@@ -1836,6 +1853,7 @@ const ServiceReporting = () => {
 					selectedServiceStatusOptions={selectedServiceStatusOptions}
 					setSelectedTransStatusOptions={setSelectedTransStatusOptions}
 					setSelectedServiceStatusOptions={setSelectedServiceStatusOptions}
+					setIsInitialOctoSearch={setIsInitialOctoSearch}
 				/>
 			</div>
 			<div className={`flex flex-col w-full font-medium overflow-y-scroll`}>
@@ -2964,6 +2982,7 @@ const FilterComp = ({
 	selectedServiceStatusOptions,
 	setSelectedTransStatusOptions,
 	setSelectedServiceStatusOptions,
+	setIsInitialOctoSearch
 }) => {
 	const clearFilters = () => {
 		setSearchQuery("");
@@ -2974,6 +2993,18 @@ const FilterComp = ({
 		setSelectedServiceStatusOptions([...serviceStatusOptions.map((item) => item.value)]);
 	};
 
+	// Add these functions to handle date picker changes
+	const handleFromDateChange = (date) => {
+		setFrom(date);
+		// If this was a manual change, no longer use the initial octo search mode
+		setIsInitialOctoSearch(false);
+	  };
+	  
+	  const handleToDateChange = (date) => {
+		setTo(date);
+		// If this was a manual change, no longer use the initial octo search mode
+		setIsInitialOctoSearch(false);
+	  };
 	return (
 		<>
 			<div className="px-8 flex items-center justify-between">
@@ -2999,11 +3030,12 @@ const FilterComp = ({
 							selectedDate={from}
 							setSelectedDate={(value) => setFrom(new Date(value))}
 							label={"From Date"}
+							onChange={handleFromDateChange}
 						/>
 					</div>
 					<div className="flex flex-col min-w-52">
 						<p className="text-sm text-gray-500 px-2">To</p>
-						<CustomDatePicker selectedDate={to} setSelectedDate={(value) => setTo(new Date(value))} label={"To Date"} />
+						<CustomDatePicker selectedDate={to} setSelectedDate={(value) => setTo(new Date(value))} label={"To Date"} onChange={handleToDateChange}/>
 					</div>
 					<MultiselectDropdown
 						width="w-48"
