@@ -73,6 +73,7 @@ import useTUserContext from "../../../../../../../../context/TransporterUserCont
 import GeneratorManifests from "./GeneratorManifests";
 import { HiOutlineChevronDown, HiOutlineChevronUp } from "react-icons/hi";
 import SearchableDropdownForParents from "../../../../../../../../components/UI/dropdowns/SearchableDropdownForParents";
+import GeneratorUpcomingServices from "./GeneratorUpcomingServices";
 
 const defaultOption = {
 	serviceType: "",
@@ -799,25 +800,30 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	const fetchSentSubcontractorRequests = useCallback(async () => {
 		if (!user?.uid || !generatorData?.id) return;
-
+	  
 		try {
-			const currentTransporterRef = doc(db, "transporters", user.uid);
-			const transporterDoc = await getDoc(currentTransporterRef);
-
-			if (transporterDoc.exists()) {
-				const transporterData = transporterDoc.data();
-				const sharedGenerators = transporterData.sharedGenerators?.fromMe || [];
-				const generatorRequests = sharedGenerators
-					.filter((req) => req.genId === generatorData.id)
-					.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-				setSentSubcontractorRequests(generatorRequests);
-				setActiveSentSSRs(generatorRequests.filter((req) => req.status !== "Cancelled"));
-			}
+		  const currentTransporterRef = doc(db, "transporters", user.uid);
+		  const transporterDoc = await getDoc(currentTransporterRef);
+	  
+		  if (transporterDoc.exists()) {
+			const transporterData = transporterDoc.data();
+			const sentRequests = transporterData.sharedGenerators?.fromMe || [];
+			const filteredSentRequests = sentRequests
+			  .filter((req) => req.genId === generatorData.id)
+			  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+			const receivedRequests = transporterData.sharedGenerators?.toMe || [];
+			const filteredReceivedRequests = receivedRequests
+			  .filter((req) => req.genId === generatorData.id && req.status === "Accepted")
+			  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+			setSentSubcontractorRequests(filteredSentRequests);
+			const activeSent = filteredSentRequests.filter((req) => req.status !== "Cancelled");
+			const combinedRequests = [...activeSent, ...filteredReceivedRequests];
+			setActiveSentSSRs(combinedRequests);
+		  }
 		} catch (error) {
-			console.error("Error fetching sent subcontractor requests:", error);
+		  console.error("Error fetching subcontractor requests:", error);
 		}
-	}, [user, generatorData]);
+	  }, [user, generatorData]);
 
 	useEffect(() => {
 		if (user?.uid && generatorData?.id) {
@@ -909,20 +915,22 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			console.log("ssr data", ssrData);
 
 			if (isReadOnly && ssrData) {
+				const isReceived = ssrData.subcontractorId === user?.uid;
 				return {
 					selectedSubContractor: {
-						id: ssrData.subcontractorId,
-						Cname: ssrData.subContractorName,
-					},
-					serviceFrequency: {
+						id: isReceived ? user?.uid : ssrData.subcontractorId,
+						Cname: isReceived ? transporterData?.companyName : ssrData.subContractorName,
+					  },
+					  serviceFrequency: {
 						type: ssrData.serviceFrequency,
 						days: ssrData.weekdays || [],
-					},
-					requestedStartDate: ssrData.requestedStartDate || null,
-					serviceType: ssrData.serviceType,
-					serviceDuration: ssrData.serviceDuration,
-					expectedItemOrService: ssrData.expectedItemsOrServices || [],
-					serviceNote: ssrData.serviceNote || "",
+					  },
+					  requestedStartDate: ssrData.requestedStartDate || null,
+					  serviceType: ssrData.serviceType,
+					  serviceDuration: ssrData.serviceDuration,
+					  expectedItemOrService: ssrData.expectedItemsOrServices || [],
+					  serviceNote: ssrData.serviceNote || "",
+					  isReceivedSSR: isReceived
 				};
 			} else {
 				return {
@@ -941,6 +949,29 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		};
 
 		const formData = getFormData();
+		const getDropdownOptions = () => {
+			if (formData.isReceivedSSR) {
+			  // For received SSRs
+			  return [{
+				label: transporterData?.companyName || user?.email || "Current Transporter",
+				value: JSON.stringify({
+				  id: user?.uid,
+				  Cname: transporterData?.companyName || "Current Transporter",
+				}),
+			  }];
+			} else {
+			  // For sent SSRs
+			  return subContractorData
+				?.filter((subContractor) => subContractor.contractorName || subContractor.name)
+				.map((subContractor) => ({
+				  label: subContractor.contractorName || subContractor.name || "--",
+				  value: JSON.stringify({
+					id: subContractor.contractorDocid || subContractor.id,
+					Cname: subContractor.contractorName || subContractor.name || "--",
+				  }),
+				}));
+			}
+		  };
 
 		return (
 			<div className="pb-4">
@@ -949,15 +980,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						<div className="w-full relative">
 							<SearchableDropdownForParents
 								label={"Sub Contractors"}
-								options={subContractorData
-									?.filter((subContractor) => subContractor.contractorName || subContractor.name)
-									.map((subContractor) => ({
-										label: subContractor.contractorName || subContractor.name || "--",
-										value: JSON.stringify({
-											id: subContractor.contractorDocid || subContractor.id,
-											Cname: subContractor.contractorName || subContractor.name || "--",
-										}),
-									}))}
+								options={getDropdownOptions()}
 								value={formData.selectedSubContractor ? JSON.stringify(formData.selectedSubContractor) : ""}
 								onChange={(selectedValue) => {
 									if (!isReadOnly) {
@@ -967,7 +990,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								}}
 								isRequired
 								listHeight="max-h-64"
-								isDisabled={isReadOnly}
+								isDisabled={isReadOnly||formData.isReceivedSSR}
 							/>
 							{!isReadOnly && errors.selectedSubContractor && (
 								<p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
@@ -1387,8 +1410,8 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	const fetchContractorData = async (transporterId) => {
 		try {
-			const transporterDoc = await getDoc(doc(db, "transporters", transporterId));
-			const transporterMarketDoc = await getDoc(doc(db, "octoMarketUsers", transporterId));
+			const transporterDoc = await getDoc(doc(db,COLLECTIONS.transporters, transporterId));
+			const transporterMarketDoc = await getDoc(doc(db,COLLECTIONS.octoMarketUsers, transporterId));
 
 			if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
 				console.log("No such transporter!");
@@ -1406,7 +1429,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			const contractorRelationships = transporterMarketData.connections || {};
 
 			const contractorPromises = Object.entries(contractorRelationships).map(async ([contractorId, relationship]) => {
-				const contractorDoc = await getDoc(doc(db, "transporters", contractorId));
+				const contractorDoc = await getDoc(doc(db,COLLECTIONS.transporters, contractorId));
 
 				if (!contractorDoc.exists()) return null;
 
@@ -1536,11 +1559,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				showSuccessToastMessage(
 					`Subcontractor Service Request sent to ${formData.selectedSubContractor.Cname} Successfully!`
 				);
-				setTimeout(() => {
 					setSuccessMessage("");
 					resetFormForNewSSR();
 					setShowSSRForm(false);
-				}, 1000);
 			} else {
 				console.log("Transporter not found.");
 			}
@@ -2409,321 +2430,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					</button>
 				</div>
 			</form>
-
-			<h6 className="font-medium py-2 text-lg">
-				<span className="font-bold">Scheduled Services: </span>
-				<span>{generatorData?.generatorName ?? "--"}</span>{" "}
-			</h6>
-			<div className="w-full overflow-x-auto">
-				<div className="flex min-w-fit bg-[#E5F2FF] font-medium p-4 gap-2 rounded-t-xl sticky top-0 z-20">
-					<div className="w-40 shrink-0 flex items-center gap-2">
-						<div className={`tooltip tooltip-right flex items-center`} data-tip={"Mark all as high priority."}>
-							<input
-								type="checkbox"
-								className="w-3 h-3 bg-white"
-								defaultChecked={false}
-								onChange={async (e) => {
-									if (typeof e?.currentTarget?.checked === "undefined") return;
-									setUpcomingServices((prev) =>
-										prev.map((el) => {
-											if (el.status === SERVICE_STATUS.PENDING) {
-												el.isPriority = e.currentTarget?.checked;
-											}
-											return el;
-										})
-									);
-									try {
-										let batch = writeBatch(db);
-										let operationCount = 0;
-										for (const el of upcomingServices) {
-											batch.update(doc(db, COLLECTIONS.scheduledServices, el.id), {
-												isPriority: e?.currentTarget?.checked,
-											});
-											operationCount++;
-											if (operationCount >= 450) {
-												await batch.commit();
-												batch = writeBatch(db);
-												operationCount = 0;
-											}
-										}
-										if (operationCount > 0) {
-											await batch.commit();
-										}
-									} catch (error) {
-										console.log(error);
-										showInternalServerErrorToastMessage();
-									}
-								}}
-							/>
-						</div>
-						<p className="truncate">Priority</p>
-					</div>
-					<div className="w-40 shrink-0">Date</div>
-					<div className="w-40 shrink-0">Operating Hours</div>
-					<div className="w-40 shrink-0">Route Info</div>
-					<div className="w-80 shrink-0 px-2">Temporary Service Instructions</div>
-					<div className="w-10 shrink-0"></div>
-					<div className="w-60 shrink-0">Service Type</div>
-					<div className="w-60 shrink-0 text-center">Action</div>
-				</div>
-				<div className="max-h-[75vh] min-w-fit">
-					{isLoadingServices ? (
-						<Loader height="h-12 pt-4" />
-					) : upcomingServices?.length > 0 ? (
-						upcomingServices.map((service, index) => (
-							<div
-								key={service?.id}
-								className={`flex items-center gap-2 border-b border-[#CCCCCC] px-4 font-base text-cardTextGray py-3 ${
-									service.status === SERVICE_STATUS.CANCELLED ? "bg-gray-200" : ""
-								}`}
-							>
-								<div className="flex items-center gap-2 shrink-0 w-40">
-									<div
-										className={`${
-											service.status === SERVICE_STATUS.CANCELLED ? "" : "tooltip tooltip-right"
-										} flex items-center`}
-										data-tip={service.isPriority ? "Cancel priority" : "Mark as priority"}
-									>
-										<input
-											type="checkbox"
-											className="w-3 h-3 bg-white"
-											disabled={service.status === SERVICE_STATUS.CANCELLED}
-											checked={service?.isPriority ?? false}
-											onChange={async (e) => {
-												if (service.status === SERVICE_STATUS.PENDING) {
-													setUpcomingServices((prev) =>
-														prev.map((el) => {
-															if (el.id === service.id) {
-																el.isPriority = e.currentTarget?.checked;
-															}
-															return el;
-														})
-													);
-												}
-												try {
-													await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-														isPriority: e.currentTarget?.checked,
-													});
-												} catch (error) {
-													console.log(error);
-													showInternalServerErrorToastMessage();
-												}
-											}}
-										/>
-									</div>
-									<span className={service?.isPriority ? "text-red-500  ml-1 truncate" : " ml-1 truncate"}>
-										{service?.isPriority ? "High Priority" : "Normal Priority"}
-									</span>
-								</div>
-								<div className="w-40 shrink-0 truncate ">
-									{service?.date ? formatUtcDateString(service.date.toDate().toUTCString()) : "--"}
-								</div>
-								<div className="w-40 shrink-0 truncate">
-									{renderUpcomingOperatingHours(formatUtcDateString(service.date.toDate().toUTCString()))}
-								</div>
-								<div className="w-40 shrink-0 truncate">
-									(<NoOfStops serviceDate={service?.date?.toDate()} routeId={service.routeId} />){" "}
-									{service.routeData?.routeLabel.length > 0 ? service.routeData?.routeLabel + " " : "N/A"}
-								</div>
-								<div className="w-80 shrink-0">
-									<input
-										type="text"
-										defaultValue={service?.temporaryServiceInstruction ?? ""}
-										disabled={service.status === SERVICE_STATUS.CANCELLED}
-										className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-1 h-8 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
-										onBlur={async (e) => {
-											console.log(service?.temporaryServiceInstruction);
-											const temporaryServiceInstruction = e?.currentTarget?.value?.trim() ?? "";
-											try {
-												await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-													temporaryServiceInstruction,
-												});
-											} catch (error) {
-												console.log(error);
-												showInternalServerErrorToastMessage();
-											}
-										}}
-									/>
-								</div>
-								<div className="w-10 shrink-0"></div>
-								<div className="w-60 shrink-0 truncate">
-									{typeof service.serviceScheduleData?.serviceType === "string" &&
-									service.serviceScheduleData?.serviceType?.length > 0
-										? serviceTypes[
-												serviceTypes.findIndex((el) => el.value === service.serviceScheduleData?.serviceType)
-										  ]?.label
-										: ""}
-									{typeof service.serviceScheduleData?.serviceType !== "string" &&
-									service.serviceScheduleData?.serviceType?.length > 0
-										? service.serviceScheduleData?.serviceType.map((type, i) => {
-												return (
-													<p key={i} className="truncate">
-														{serviceTypes[serviceTypes.findIndex((el) => el.value === type)]?.label ?? ""}{" "}
-													</p>
-												);
-										  })
-										: ""}
-								</div>
-								<div className="w-60 shrink-0">
-									<button
-										type="button"
-										className="btn btn-primary btn-sm text-base ml-auto w-full"
-										disabled={service.status === SERVICE_STATUS.INPROGRESS}
-										onClick={() => {
-											document.getElementById(`cancel_service_modal_${service.id}`).showModal();
-										}}
-									>
-										{service.status === SERVICE_STATUS.PENDING || service.status === SERVICE_STATUS.INPROGRESS
-											? "Cancel Service"
-											: ""}
-										{service.status === SERVICE_STATUS.CANCELLED ? "Reinstate Service" : ""}
-									</button>
-									<dialog id={`cancel_service_modal_${service.id}`} className="modal">
-										<div className="modal-box">
-											<div>
-												<button
-													className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-													type="button"
-													onClick={() => {
-														document.getElementById(`cancel_service_modal_${service.id}`).close();
-													}}
-												>
-													✕
-												</button>
-											</div>
-											<h3 className="font-bold text-lg">Are you sure?</h3>
-											<div className="flex py-5 gap-5 flex-col">
-												<p className="">
-													Proceeding with this operation will mark this service as{" "}
-													{service.status === SERVICE_STATUS.CANCELLED ? "Pending" : "Cancelled"}.
-												</p>
-											</div>
-											<div className={`py-5 ${service.status === SERVICE_STATUS.CANCELLED ? "hidden" : "block"}`}>
-												<label htmlFor="cancellationNote">
-													<p>Enter Note for Cancellation *</p>
-													<textarea
-														rows={3}
-														name="cancellationNote"
-														id={`cancellationNote_${service.id}`}
-														defaultValue={service?.temporaryServiceInstruction ?? ""}
-														disabled={service.status === SERVICE_STATUS.CANCELLED}
-														className={`w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText`}
-													/>
-												</label>
-											</div>
-											<div className="flex w-full justify-between">
-												{service.status === SERVICE_STATUS.CANCELLED && (
-													<button
-														type="button"
-														className={`btn ${"btn-error"} btn-sm`}
-														onClick={() => {
-															document.getElementById(`cancel_service_modal_${service.id}`).close();
-														}}
-													>
-														{"Keep It Cancelled"}
-													</button>
-												)}
-
-												<button
-													className={`btn ${
-														service.status === SERVICE_STATUS.CANCELLED ? "btn-primary" : "btn-error"
-													} btn-sm`}
-													type="button"
-													onClick={async () => {
-														console.log(service.id);
-														const el = document.getElementById(`cancellationNote_${service.id}`);
-														if (!el) return;
-														const temporaryServiceInstruction = el.value.trim();
-														if (temporaryServiceInstruction.length === 0) {
-															showErrorToastMessage("Cancellation note is required.");
-															return;
-														}
-														if (service.status === SERVICE_STATUS.PENDING) {
-															setUpcomingServices((prev) =>
-																prev.map((el) => {
-																	if (el.id === service.id) {
-																		el.status = SERVICE_STATUS.CANCELLED;
-																	}
-																	return el;
-																})
-															);
-															try {
-																await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-																	status: SERVICE_STATUS.CANCELLED,
-																	temporaryServiceInstruction,
-																});
-															} catch (error) {
-																console.log(error);
-																showInternalServerErrorToastMessage();
-															}
-														} else if (service.status === SERVICE_STATUS.CANCELLED) {
-															setUpcomingServices((prev) =>
-																prev.map((el) => {
-																	if (el.id === service.id) {
-																		el.status = SERVICE_STATUS.PENDING;
-																	}
-																	return el;
-																})
-															);
-															try {
-																await updateDoc(doc(db, COLLECTIONS.scheduledServices, service.id), {
-																	status: SERVICE_STATUS.PENDING,
-																	temporaryServiceInstruction: "",
-																});
-															} catch (error) {
-																console.log(error);
-																showInternalServerErrorToastMessage();
-															}
-														}
-														document.getElementById(`cancel_service_modal_${service.id}`).close();
-													}}
-												>
-													{service.status === SERVICE_STATUS.CANCELLED
-														? "Reinstate This Service"
-														: "Cancel This Service"}
-												</button>
-												{service.status === SERVICE_STATUS.PENDING && (
-													<button
-														type="button"
-														className={`btn ${"btn-primary"} btn-sm`}
-														onClick={() => {
-															document.getElementById(`cancel_service_modal_${service.id}`).close();
-														}}
-													>
-														{"Keep This Service"}
-													</button>
-												)}
-											</div>
-										</div>
-									</dialog>
-								</div>
-							</div>
-						))
-					) : (
-						<div className="w-full text-center py-4 text-cardTextGray">No upcoming services found.</div>
-					)}
-				</div>
-			</div>
-			<div className="ml-auto">
-				<button
-					type="button"
-					className="group bg-[#E5F2FF] px-8 py-2.5 w-96 justify-center hover:bg-blue-300 transition-colors duration-200 rounded-full flex gap-2"
-					onClick={() => !copied && handleCopyToClipboard()}
-				>
-					{copied ? (
-						<>
-							<MdCheck size={24} className="group-hover:fill-cardTextBlue hover:cursor-pointer" />
-							<h6 className="group-hover-">Copied to Clipboard!</h6>
-						</>
-					) : (
-						<>
-							<MdContentCopy size={24} className="group-hover:fill-cardTextBlue hover:cursor-pointer" />
-							<h6 className="group-hover-">Copy Service Dates to Clipboard</h6>
-						</>
-					)}
-				</button>
-			</div>
-
+			<GeneratorUpcomingServices generatorData={generatorData} />
 			<h6 className="font-medium py-2 text-lg">
 				<strong>Service History Report : </strong> {generatorData?.generatorName ?? ""}
 			</h6>
