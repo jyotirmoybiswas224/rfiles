@@ -8,13 +8,23 @@ import {
 	getDay,
 	setYear,
 	setMonth,
+	parseISO,
 } from "date-fns";
 import { IoIosArrowBack, IoIosArrowForward } from "react-icons/io";
-import { SERVICE_TYPES } from "../../../../../../../../../utils/constants";
+import { SERVICE_STATUS, SERVICE_TYPES } from "../../../../../../../../../utils/constants";
+import {
+	formatDateString,
+	formatTimeString,
+	formatUtcDateString,
+} from "../../../../../../../../../utils/helpers";
 
-const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), wholeCalender = true, showNavButtons = true }) => {
-	const [currentDate, setCurrentDate] = useState(startDate);
-	const [selectedDate, setSelectedDate] = useState(new Date());
+const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), wholeCalender = true, showNavButtons = true, timeZone }) => {
+	const normalizeDate = (date) => {
+		return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+	};
+	
+	const [currentDate, setCurrentDate] = useState(normalizeDate(startDate));
+	const [selectedDate, setSelectedDate] = useState(normalizeDate(new Date()));
 	const [isSelectingDate, setIsSelectingDate] = useState(false);
 	const datePickerRef = useRef(null);
 	const monthStart = startOfMonth(currentDate);
@@ -29,15 +39,13 @@ const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), whole
 
 	const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 	const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-	const years = Array.from({ length: 21 }, (_, i) => new Date(currentDate).getFullYear() - 10 + i);
+	const years = Array.from({ length: 21 }, (_, i) => currentDate.getFullYear() - 10 + i);
 
 	const isToday = (date) => {
 		if (!date) return false;
-		const td = new Date();
-		const today = td.toLocaleDateString("en-CA");
-		return (
-			new Date(date).toLocaleDateString("en-CA") === today
-		);
+		const todayUTC = normalizeDate(new Date());
+		const dateUTC = normalizeDate(date);
+		return dateUTC.getTime() === todayUTC.getTime();
 	};
 
 	useEffect(() => {
@@ -54,21 +62,23 @@ const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), whole
 	}, [datePickerRef]);
 
 	const handleDateClick = (date) => {
-		if (date) setSelectedDate(date);
+		if (date) {
+			setSelectedDate(normalizeDate(date));
+		}
 	};
 
 	const handlePrevMonth = () => {
-		setCurrentDate((prevDate) => new Date(prevDate.getFullYear(), prevDate.getMonth() - 1, 1));
+		setCurrentDate((prevDate) => normalizeDate(new Date(prevDate.getFullYear(), prevDate.getMonth() - 1, 1)));
 	};
 
 	const handleNextMonth = () => {
-		setCurrentDate((prevDate) => new Date(prevDate.getFullYear(), prevDate.getMonth() + 1, 1));
+		setCurrentDate((prevDate) => normalizeDate(new Date(prevDate.getFullYear(), prevDate.getMonth() + 1, 1)));
 	};
 
 	const handleToday = () => {
-		const today = new Date();
-		setCurrentDate(new Date(today));
-		setSelectedDate(new Date(today));
+		const todayUTC = normalizeDate(new Date());
+		setCurrentDate(todayUTC);
+		setSelectedDate(todayUTC);
 	};
 
 	const handleMonthYearClick = () => {
@@ -77,119 +87,116 @@ const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), whole
 
 	const handleMonthChange = (event) => {
 		const newMonth = parseInt(event.target.value, 10);
-		setCurrentDate((prevDate) => setMonth(prevDate, newMonth));
+		setCurrentDate((prevDate) => normalizeDate(new Date(prevDate.getFullYear(), newMonth, 1)));
 	};
 
 	const handleYearChange = (event) => {
 		const newYear = parseInt(event.target.value, 10);
-		setCurrentDate((prevDate) => setYear(prevDate, newYear));
+		setCurrentDate((prevDate) => normalizeDate(new Date(newYear, prevDate.getMonth(), 1)));
+	};
+	const getFormattedServiceDate = (timestamp) => {
+		if (!timestamp) return null;
+		return formatUtcDateString(timestamp.toDate().toUTCString());
 	};
 
 	const renderTodaysButton = (day, index) => {
-		const td = new Date();
-		td.setHours(0, 0, 0, 0);
-		const today = td.toLocaleDateString("en-CA");
-		let isCurrentDateToday = false;
-		let isPastDay = false;
-		let isUnlogged = false;
-		let isComplete = false;
-
-		const dayCompare = day ? new Date(day) : null;
-		if (dayCompare) {
-			dayCompare.setHours(0, 0, 0, 0);
+		if (!day) {
+			return <div className="min-h-6 min-w-6 md:h-10 md:w-10"></div>;
 		}
 
-		if (day && dayCompare.getTime() === td.getTime()) {
-			isCurrentDateToday = true;
-		}
-
-		const filteredServices = Array.isArray(allServices)
+		const normalizedDay = normalizeDate(day);
+		const dayFormatString = normalizedDay.toUTCString();
+		const formattedDay = formatUtcDateString(dayFormatString);
+		const isCurrentDateToday = isToday(day);
+		const todayNormalized = normalizeDate(new Date());
+		const isPastDay = normalizedDay < todayNormalized;
+		
+		const servicesForDay = Array.isArray(allServices)
 			? allServices.filter((el) => {
-				if (!day) return false;
-				const serviceDate = new Date(el.date.toDate()).toISOString().split("T")[0];
-				const currentDate = new Date(day).toLocaleDateString("en-CA");
-				return serviceDate === currentDate;
+				if (!el.date) return false;
+				const serviceDate = getFormattedServiceDate(el.date);
+				return serviceDate === formattedDay;
+			})
+			: [];
+			
+		const completedServicesOnThisDay = Array.isArray(allServices)
+			? allServices.filter((el) => {
+				if (!el.completedAt&&el.status==SERVICE_STATUS.COMPLETE) return false;
+				const completedDate = getFormattedServiceDate(el.completedAt);
+				return completedDate == formattedDay;
 			})
 			: [];
 
-		if (filteredServices.length > 0) {
-			const todayDate = new Date().toLocaleDateString("en-CA");
+		const hasUnloggedServices = isPastDay && servicesForDay.some(service => 
+			service.status === "PENDING" || service.status === "INPROGRESS"||service.status === "CLOSED"
+		);
 
-			isPastDay = todayDate > dayCompare.toLocaleDateString("en-CA");
-			isUnlogged = todayDate > dayCompare.toLocaleDateString("en-CA") &&
-				filteredServices.some(service => service.status === "PENDING" || service.status === "INPROGRESS");
-
-			isComplete = filteredServices.some(service => {
-				const completedAt = service.completedAt ? new Date(service.completedAt.toDate()).toLocaleDateString("en-CA") : null;
-				return completedAt && completedAt === dayCompare.toLocaleDateString("en-CA");
-			});
-
-			if (isCurrentDateToday) {
-				isComplete = filteredServices.every(service => {
-					const completedAt = service.completedAt ? new Date(service.completedAt.toDate()).toLocaleDateString("en-CA") : null;
-					return completedAt && completedAt === today;
-				});
-			}
-
-			console.log("cal test", {
-				filteredServices: filteredServices,
-				today: todayDate,
-				isUnlogged,
-				isComplete,
-				isPastDay
-			});
-		}
+		const hasCompletedServices = completedServicesOnThisDay.length > 0;
 
 		const containerClasses = isCurrentDateToday
-			? "min-h-6 min-w-6 md:h-10 md:w-10 border border-red-500 border-[3px]  flex items-center justify-center"
+			? "min-h-6 min-w-6 md:h-10 md:w-10 border border-red-500 border-[3px] flex items-center justify-center"
 			: "min-h-6 min-w-6 md:h-10 md:w-10 flex items-center justify-center";
 
-		let buttonClasses = "h-8 w-8 rounded-full flex items-center justify-center";
-
-		if (!filteredServices.length) {
-			buttonClasses += " text-cardTextGray";
-			if (day && format(selectedDate, "yyyy-MM-dd") === format(day, "yyyy-MM-dd") && !isToday(new Date(day))) {
-				buttonClasses += " bg-green-200";
-			}
+		if (!servicesForDay.length && !completedServicesOnThisDay.length) {
+			let buttonClasses = "h-8 w-8 rounded-full flex items-center justify-center text-cardTextGray";
 			
-			if (isPastDay && !isUnlogged && !isComplete) {
-				buttonClasses += " bg-gray-500";
-			}
-			
-			if (isUnlogged && !isComplete) {
-				buttonClasses += " border border-gray-500 bg-transparent text-black";
-			}
-			
-			if (isPastDay && isUnlogged && isComplete) {
-				return (
-					<div className={containerClasses}>
-						<div className="h-8 w-8 rounded-full relative overflow-hidden flex items-center justify-center">
-							<div className="absolute left-0 top-0 w-4 h-8 border-t border-b border-l border-gray-500 rounded-l-full"></div>
-							<div className="absolute right-0 top-0 w-4 h-8 bg-gray-500 rounded-r-full"></div>
-							<p className="z-10 text-cardTextGray">{day ? format(day, "d") : ""}</p>
-						</div>
-					</div>
-				);
-			}
-			
-			if (isCurrentDateToday && isComplete) {
-				buttonClasses += " bg-gray-500";
-			}
+		
 
 			return (
 				<div className={containerClasses}>
 					<button
-						key={day ? day : `empty-${index}`}
-						onClick={() => day && handleDateClick(day)}
+						key={day.toString()}
+						onClick={() => handleDateClick(day)}
 						className={buttonClasses}
-						disabled={!day || !isSameMonth(day, currentDate)}
+						disabled={!isSameMonth(day, currentDate)}
 					>
-						{day ? format(day, "d") : ""}
+						{format(day, "d")}
 					</button>
 				</div>
 			);
-		} else {
-			const allServiceTypes = filteredServices.map((service) => service?.scheduleData?.serviceType).join(" ");
+		} 
+		else if (hasCompletedServices && hasUnloggedServices) {
+			return (
+				<div className={containerClasses}>
+					<div className="h-8 w-8 rounded-full relative overflow-hidden flex items-center justify-center">
+						<div className="absolute left-0 top-0 w-4 h-8 border-t border-b border-l border-gray-500 rounded-l-full"></div>
+						<div className="absolute right-0 top-0 w-4 h-8 bg-gray-500 rounded-r-full"></div>
+						<p className="z-10 text-cardTextGray">{format(day, "d")}</p>
+					</div>
+				</div>
+			);
+		}
+		else if (hasCompletedServices) {
+			return (
+				<div className={containerClasses}>
+					<button
+						key={day.toString()}
+						onClick={() => handleDateClick(day)}
+						className="h-8 w-8 rounded-full flex items-center justify-center bg-gray-500 text-white"
+						disabled={!isSameMonth(day, currentDate)}
+					>
+						{format(day, "d")}
+					</button>
+				</div>
+			);
+		}
+		else if (hasUnloggedServices) {
+			return (
+				<div className={containerClasses}>
+					<button
+						key={day.toString()}
+						onClick={() => handleDateClick(day)}
+						className="h-8 w-8 rounded-full flex items-center justify-center border border-gray-500 bg-transparent text-black"
+						disabled={!isSameMonth(day, currentDate)}
+					>
+						{format(day, "d")}
+					</button>
+				</div>
+			);
+		}
+		else {
+			const allServicesToConsider = [...servicesForDay, ...completedServicesOnThisDay];
+			const allServiceTypes = allServicesToConsider.map((service) => service?.scheduleData?.serviceType).join(" ");
 
 			if (
 				allServiceTypes.includes(SERVICE_TYPES.MEDICAL_WASTE) &&
@@ -198,82 +205,55 @@ const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), whole
 				return (
 					<div className={containerClasses}>
 						<button
-							key={day ? day : `empty-${index}`}
-							onClick={() => day && handleDateClick(day)}
-							className={`h-8 w-8 rounded-full flex items-center justify-center text-cardTextGray relative
-								${isCurrentDateToday && isComplete ? "bg-gray-500" : ""}
-								${isPastDay && !isUnlogged && isComplete ? "bg-gray-500 text-white" : ""}
-								${isUnlogged && !isComplete ? "border border-gray-500 bg-transparent text-black" : "text-white"}`}
-							disabled={!day || !isSameMonth(day, currentDate)}
+							key={day.toString()}
+							onClick={() => handleDateClick(day)}
+							className="h-8 w-8 rounded-full flex items-center justify-center text-white relative"
+							disabled={!isSameMonth(day, currentDate)}
 						>
-							{isPastDay && isUnlogged && isComplete ? (
-								<>
-									<div className="absolute left-0 top-0 w-4 h-8 border-t border-b border-l border-gray-500 rounded-l-full"></div>
-									<div className="absolute right-0 top-0 w-4 h-8 bg-gray-500 rounded-r-full"></div>
-								</>
-							) : !isPastDay && (
-								<>
-									<div className={`w-4 h-8 bg-green-500 rounded-l-full absolute left-0 `}></div>
-									<div className={`w-4 h-8 bg-red-500 rounded-r-full absolute right-0`}></div>
-								</>
-							)}
-							<p className="z-10">{day ? format(day, "d") : ""}</p>
+							<div className="w-4 h-8 bg-primaryGreen rounded-l-full absolute left-0"></div>
+							<div className="w-4 h-8 bg-red-500 rounded-r-full absolute right-0"></div>
+							<p className="z-10">{format(day, "d")}</p>
 						</button>
 					</div>
 				);
-			} else if (allServiceTypes.includes(SERVICE_TYPES.MEDICAL_WASTE) && !isPastDay) {
+			} else if (allServiceTypes.includes(SERVICE_TYPES.MEDICAL_WASTE)) {
 				return (
 					<div className={containerClasses}>
 						<button
-							key={day ? day : `empty-${index}`}
-							onClick={() => day && handleDateClick(day)}
-							className={`h-8 w-8 rounded-full flex items-center justify-center text-cardTextGray
-								${isCurrentDateToday && isComplete ? "bg-gray-500" : "bg-red-500"}
-								text-white`}
-							disabled={!day || !isSameMonth(day, currentDate)}
+							key={day.toString()}
+							onClick={() => handleDateClick(day)}
+							className="h-8 w-8 rounded-full flex items-center justify-center bg-red-500 text-white"
+							disabled={!isSameMonth(day, currentDate)}
 						>
-							{day ? format(day, "d") : ""}
+							{format(day, "d")}
 						</button>
 					</div>
 				);
-			} else if (allServiceTypes.includes(SERVICE_TYPES.PAPER_SHREDDING) && !isPastDay) {
+			} else if (allServiceTypes.includes(SERVICE_TYPES.PAPER_SHREDDING)) {
 				return (
 					<div className={containerClasses}>
 						<button
-							key={day ? day : `empty-${index}`}
-							onClick={() => day && handleDateClick(day)}
-							className={`h-8 w-8 rounded-full flex items-center justify-center text-cardTextGray
-								${isCurrentDateToday && isComplete ? "bg-gray-500" : "bg-primaryGreen"}
-								text-white`}
-							disabled={!day || !isSameMonth(day, currentDate)}
+							key={day.toString()}
+							onClick={() => handleDateClick(day)}
+							className="h-8 w-8 rounded-full flex items-center justify-center bg-primaryGreen text-white"
+							disabled={!isSameMonth(day, currentDate)}
 						>
-							{day ? format(day, "d") : ""}
+							{format(day, "d")}
 						</button>
 					</div>
 				);
 			} else {
 				return (
 					<div className={containerClasses}>
-						{isPastDay && isUnlogged && isComplete ? (
-							<div className="h-8 w-8 rounded-full relative overflow-hidden flex items-center justify-center">
-								<div className="absolute left-0 top-0 w-4 h-8 border-t border-b border-l border-gray-500 rounded-l-full"></div>
-								<div className="absolute right-0 top-0 w-4 h-8 bg-gray-500 rounded-r-full"></div>
-								<p className="z-10 text-cardTextGray">{day ? format(day, "d") : ""}</p>
-							</div>
-						) : (
-							<button
-								key={day ? day : `empty-${index}`}
-								onClick={() => day && handleDateClick(day)}
-								className={`h-8 w-8 rounded-full flex items-center justify-center text-cardTextGray
-									${isCurrentDateToday && isComplete ? "bg-gray-500" : ""}
-									${isPastDay && !isUnlogged && isComplete ? "bg-gray-500 text-white" : ""}
-									${isUnlogged && !isComplete ? "border border-gray-500 bg-transparent text-black" : ""}
-									${day && format(selectedDate, "yyyy-MM-dd") === format(day, "yyyy-MM-dd") && !isToday(day) ? "bg-green-200" : ""}`}
-								disabled={!day || !isSameMonth(day, currentDate)}
-							>
-								{day ? format(day, "d") : ""}
-							</button>
-						)}
+						<button
+							key={day.toString()}
+							onClick={() => handleDateClick(day)}
+							className={`h-8 w-8 rounded-full flex items-center justify-center text-cardTextGray
+								${normalizeDate(day).getTime() === normalizeDate(selectedDate).getTime() && !isToday(day) ? "bg-green-200" : ""}`}
+							disabled={!isSameMonth(day, currentDate)}
+						>
+							{format(day, "d")}
+						</button>
 					</div>
 				);
 			}
@@ -283,8 +263,8 @@ const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), whole
 	return (
 		<div
 			className={`w-full text-calendarHeading min-h-80p mx-auto flex flex-col gap-5 shadow-xl rounded-xl p-5 ${
-				new Date().getFullYear() === new Date(currentDate).getFullYear() &&
-				new Date().getMonth() === new Date(currentDate).getMonth() &&
+				new Date().getFullYear() === currentDate.getFullYear() &&
+				new Date().getMonth() === currentDate.getMonth() &&
 				!wholeCalender
 					? "border-2 border-solid border-red-500"
 					: ""
@@ -355,4 +335,4 @@ const CalendarWithTimeSlots = ({ allServices = [], startDate = new Date(), whole
 	);
 };
 
-export default CalendarWithTimeSlots;
+export default CalendarWithTimeSlots
