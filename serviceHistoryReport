@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import * as dateFnsTz from "date-fns-tz";
-import ReportCheckbox from "./ReportCheckBox";
 import CustomDatePicker from "../../../../../components/UI/CustomDatePicker";
 import Loader from "../../../../../components/UI/loaders/Loader";
 import {
@@ -16,7 +15,6 @@ import {
 	onSnapshot,
 	orderBy,
 	query,
-	setDoc,
 	startAfter,
 	Timestamp,
 	updateDoc,
@@ -34,17 +32,12 @@ import {
 	transferStatusMap,
 	transferStatusType,
 } from "../../../../../utils/constants";
-import DropdownReport from "./ReportDropDown";
 import {
 	capitalizeFirstLetter,
-	dateFormatter,
-	formattedDate,
 	formattedDateTime,
 	formatUtcDateString,
+	formatUtcDateTimeString,
 	octoFormatter,
-	showErrorToastMessage,
-	showInternalServerErrorToastMessage,
-	showSuccessToastMessage,
 } from "../../../../../utils/helpers";
 import MultiselectDropdown from "../../../../../components/UI/dropdowns/MultiselectDropdown";
 import { FiSearch } from "react-icons/fi";
@@ -214,6 +207,7 @@ const getTransferredContainers = async (allContainerEntries = [], serviceId = ""
 
 const ServiceReporting = () => {
 	const [isLoading, setIsLoading] = useState(true);
+	const [isLoadingMore, setIsLoadingMore] = useState(false);
 	const [selectAll, setSelectAll] = useState(false);
 	const [indeterminate, setIndeterminate] = useState(false);
 	const [completeServices, setCompleteServices] = useState([]);
@@ -259,6 +253,7 @@ const ServiceReporting = () => {
 	const selectAllRef = useRef();
 	const [containerPriceBook, setContainerPriceBook] = useState({});
 	const [showAddContainerModal, setShowAddContainerModal] = useState(false);
+	const [unsubscribers, setUnsubscribers] = useState([]);
 	const [selectedServiceStatusOptions, setSelectedServiceStatusOptions] = useState(
 		serviceStatusOptions.map((item) => item.value)
 	);
@@ -274,10 +269,7 @@ const ServiceReporting = () => {
 	const [pageSize] = useState(100);
 	const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
 	const [hasMore, setHasMore] = useState(false);
-	const [unsubscribeServices, setUnsubscribeServices] = useState(null);
-// Add this with your other state declarations
-const [isSearchingByOctoNumber, setIsSearchingByOctoNumber] = useState(false);
-const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
+	const [dateFilterManuallyChanged, setDateFilterManuallyChanged] = useState(false);
 
 	// Load once during component mount or on page load
 	const loadContainerPriceBook = async () => {
@@ -301,20 +293,11 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 
 	useEffect(() => {
 		if (genOctoNumber) {
-		  console.log("genOctonumber", genOctoNumber);
-		  setSearchQuery(genOctoNumber);
-		  setIsInitialOctoSearch(true);
-		  
-		  // Set very wide date range to include all services
-		  const pastDate = new Date();
-		  pastDate.setFullYear(pastDate.getFullYear() - 5); // Go back 5 years
-		  setFrom(pastDate);
-		  
-		  const futureDate = new Date();
-		  futureDate.setFullYear(futureDate.getFullYear() + 1); // Go forward 1 year
-		  setTo(futureDate);
+			console.log("genOctonumber", genOctoNumber);
+			setSearchQuery(genOctoNumber);
+			// viewButtonHandler(gen);
 		}
-	  }, [genOctoNumber]);
+	}, [genOctoNumber]);
 
 	const fetchAllDriverOptions = async () => {
 		try {
@@ -540,30 +523,48 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 			const delContainerDocs = await Promise.all(delContainerRefs.map((ref) => getDoc(ref)));
 			deliverySummary = delContainerDocs.map((doc) => ({ id: doc.id, ...doc.data() }));
 		}
-		console.log({ serviceData });
+
+		if (serviceData.serviceScheduleId) {
+			let scheduleDoc = await getDoc(doc(db, COLLECTIONS.serviceSchedules, serviceData.serviceScheduleId));
+			if (scheduleDoc.exists()) serviceData.scheduleData = { id: scheduleDoc.id, ...scheduleDoc.data() };
+			else serviceData.scheduleData = null;
+		} else {
+			serviceData.scheduleData = null;
+		}
+
 		let serviceSummary = await getSummaryData(
 			allServicedContainersData,
 			serviceData.transferStatus === "COMPLETE" ? serviceData.transferredContainers : []
 		);
 
-		console.log("Service Status", serviceData, serviceSummary);
+		console.log("Service Data date", serviceData?.date?.toDate());
+
+		if (serviceData?.status === SERVICE_STATUS.CLOSED) {
+			console.log({ unavailableService: serviceData });
+		}
 
 		return {
 			id: serviceData.id,
 			date: serviceData.date,
 			completedAt: serviceData.completedAt,
-			time: serviceData.date.toDate().toLocaleTimeString(),
+			time: serviceData.date?.toDate(),
 			driverNote: serviceData?.driverNote?.length > 0 ? serviceData?.driverNote : "--",
 			tempServiceIns: serviceData?.tempServiceIns,
 			customerId: generatorDataRef.id,
 			generatorId: generatorData.id,
 			serviceId: serviceData.id,
+			completedViaServiceHistoryPage: Boolean(serviceData.completedViaServiceHistoryPage),
 			scheduleId: serviceData.serviceScheduleId,
 			generatorName: `${generatorData?.generatorName ?? "--"} `,
 			email: generatorData.serviceAddress?.email?.length ? generatorData.serviceAddress?.email : "--",
 			phone: generatorData.serviceAddress?.phone?.length ? generatorData.serviceAddress?.phone : "",
 			internalAccountNumber: generatorData.internalAccountNumber?.length ? generatorData.internalAccountNumber : "--",
 			genId: generatorData.id,
+			expectedItemOrService: serviceData.scheduleData
+				? serviceData.scheduleData?.expectedItemOrService
+					? serviceData.scheduleData?.expectedItemOrService?.map((e) => e.item)
+					: []
+				: [],
 			driverId: serviceData.assignedDriverId,
 			deliveryId: transData.length > 0 ? transData?.[0].id : null,
 			octoNumber: octoFormatter(generatorData.octoNumber) ?? "--",
@@ -596,7 +597,7 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 					: serviceData?.status === SERVICE_STATUS.COMPLETE
 					? "COMPLETE"
 					: serviceData?.status === SERVICE_STATUS.CLOSED || serviceData?.status === SERVICE_STATUS.CANCELLED
-					? "Unavailable"
+					? "UNAVAILABLE"
 					: "",
 			transferStatus: serviceData?.transferStatus,
 			transferredContainers: serviceData.transferredContainers ?? [],
@@ -611,69 +612,38 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 	};
 
 	const viewButtonHandler = async () => {
-		if (!from) {
-			showErrorToastMessage("Please select from date.");
-			return;
-		}
-		if (!to) {
-			showErrorToastMessage("Please select to date.");
-			return;
-		}
-
 		setIsLoading(true);
 
-		let today = new Date();
-		let isFromToday =
-			today.getDate() == from.getDate() &&
-			today.getMonth() == from.getMonth() &&
-			today.getFullYear() == from.getFullYear();
-		let isToToday =
-			today.getDate() == to.getDate() && today.getMonth() == to.getMonth() && today.getFullYear() == to.getFullYear();
+		unsubscribers.forEach((unsub) => unsub());
+		setUnsubscribers([]);
 
+		const shouldBypassDateFilter = genOctoNumber && !dateFilterManuallyChanged;
 		const utcFromDate = new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0));
 		const utcToDate = new Date(Date.UTC(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999));
-
-		console.log({ from, to, utcFromDate, utcToDate });
 
 		try {
 			const q = query(
 				collection(db, COLLECTIONS.scheduledServices),
-				where("date", ">=", utcFromDate),
-				where("date", "<=", utcToDate),
+				where("date", ">=", Timestamp.fromDate(utcFromDate)),
+				where("date", "<=", Timestamp.fromDate(utcToDate)),
 				where("status", "!=", SERVICE_STATUS.DELETED),
 				orderBy("date", "desc"),
 				limit(pageSize)
 			);
-
-			if (unsubscribeServices) unsubscribeServices();
 
 			const snapshotRes = await getDocs(q);
 			const docs = snapshotRes.docs
 				.map((doc) => ({ id: doc.id, ...doc.data() }))
 				.filter((doc) => genIds.includes(doc.generatorId));
 
-			// Process initial data immediately
+			// Process initial data
 			const processedDocs = await Promise.all(docs.map((doc) => processDoc(doc)));
-			setCompleteServices(processedDocs);
+			setCompleteServices(processedDocs?.sort((a, b) => a.date?.toDate() > b.date?.toDate()));
 
-			// Set up real-time subscriptions
-			const unsubscribers = [];
-			for (const docData of docs) {
-				const docRef = doc(db, COLLECTIONS.scheduledServices, docData.id);
-				const unsubscribe = onSnapshot(docRef, async (snap) => {
-					if (!snap.exists()) return;
-					const updatedDoc = { id: snap.id, ...snap.data() };
-					if (!genIds.includes(updatedDoc.generatorId)) return;
-					const processed = await processDoc(updatedDoc);
-					setCompleteServices((prev) => {
-						const existing = prev.find((s) => s.id === processed.id);
-						return existing ? prev : [...prev, processed];
-					});
-				});
-				unsubscribers.push(unsubscribe);
-			}
+			// Set up listeners for these documents
+			const newUnsubscribers = setupDocumentListeners(docs);
+			setUnsubscribers(newUnsubscribers);
 
-			setUnsubscribeServices(() => () => unsubscribers.forEach((unsub) => unsub()));
 			setLastVisibleDoc(snapshotRes.docs[snapshotRes.docs.length - 1]);
 			setHasMore(snapshotRes.docs.length >= pageSize);
 		} catch (error) {
@@ -686,18 +656,15 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 	};
 
 	const loadMore = async () => {
-		// Don't execute if there's no pagination marker or more data
 		if (!lastVisibleDoc || !hasMore) return;
-
-		// Set loading state
-		setIsLoading(true);
+		setIsLoadingMore(true);
 
 		try {
-			// Convert local dates to UTC for Firestore query
-			const utcFromDate = new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0));
+			const shouldBypassDateFilter = genOctoNumber && !dateFilterManuallyChanged;
+
+			const utcFromDate = shouldBypassDateFilter? new Date(1, 1, 2000) :new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0));
 			const utcToDate = new Date(Date.UTC(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999));
 
-			// Create paginated query
 			const q = query(
 				collection(db, COLLECTIONS.scheduledServices),
 				where("date", ">=", utcFromDate),
@@ -708,67 +675,82 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 				limit(pageSize)
 			);
 
-			// Execute query
 			const snap = await getDocs(q);
-
-			// Filter documents based on generator IDs
 			const newDocs = snap.docs
 				.map((doc) => ({ id: doc.id, ...doc.data() }))
 				.filter((doc) => genIds.includes(doc.generatorId));
 
-			// Process documents in parallel
-			const processedNewDocs = await Promise.all(
-				newDocs.map(async (doc) => {
-					// Add real-time listener for each document
-					const docRef = doc(db, COLLECTIONS.scheduledServices, doc.id);
-					const unsubscribe = onSnapshot(docRef, async (snap) => {
-						if (!snap.exists()) return;
-						const updatedDoc = { id: snap.id, ...snap.data() };
-						if (!genIds.includes(updatedDoc.generatorId)) return;
+			// Process new documents
+			const processedDocs = await Promise.all(newDocs.map((doc) => processDoc(doc)));
 
-						const processed = await processDoc(updatedDoc);
-						setCompleteServices((prev) => {
-							const existing = prev.find((s) => s.id === processed.id);
-							return existing ? prev : [...prev, processed];
-						});
-					});
+			// Merge with existing documents
+			setCompleteServices((prev) => [...prev, ...processedDocs]);
 
-					// Store unsubscribe function
-					setUnsubscribeServices((prev) => {
-						const newSubs = [...(prev?.current || []), unsubscribe];
-						return { current: newSubs };
-					});
+			// Set up listeners for these new documents
+			const newUnsubscribers = setupDocumentListeners(newDocs);
+			setUnsubscribers((prev) => [...prev, ...newUnsubscribers]);
 
-					// Return initial processed document
-					return processDoc(doc);
-				})
-			);
-
-			// Update state with new documents
-			setCompleteServices((prev) => [...prev, ...processedNewDocs]);
-
-			// Update pagination markers
 			setLastVisibleDoc(snap.docs[snap.docs.length - 1]);
 			setHasMore(snap.docs.length >= pageSize);
 		} catch (error) {
 			console.error("Error loading more services:", error);
 			toast.error("Failed to load more services. Please try again.");
 		} finally {
-			// Always reset loading state
-			setIsLoading(false);
+			setIsLoadingMore(false);
 		}
 	};
 
+	// Helper function to set up listeners
+	const setupDocumentListeners = (docs) => {
+		const listeners = [];
+
+		for (const docData of docs) {
+			const docRef = doc(db, COLLECTIONS.scheduledServices, docData.id);
+			const unsubscribe = onSnapshot(docRef, async (snap) => {
+				if (!snap.exists()) return;
+
+				const updatedDoc = { id: snap.id, ...snap.data() };
+				if (!genIds.includes(updatedDoc.generatorId)) return;
+
+				const processed = await processDoc(updatedDoc);
+
+				setCompleteServices((prev) => {
+					// Find if document already exists in the array
+					const index = prev.findIndex((doc) => doc.id === processed.id);
+
+					if (index >= 0) {
+						// Update existing document
+						const newArray = [...prev];
+						newArray[index] = processed;
+						return newArray;
+					} else {
+						// Add new document
+						return [...prev, processed];
+					}
+				});
+			});
+
+			listeners.push(unsubscribe);
+		}
+
+		return listeners;
+	};
+
+	// Make sure to clean up all listeners when component unmounts
 	useEffect(() => {
 		return () => {
-			if (unsubscribeServices) unsubscribeServices();
+			unsubscribers.forEach((unsub) => unsub());
 		};
-	}, [unsubscribeServices]);
+	}, [unsubscribers]);
 
 	const normalizedSearchQuery = searchQuery.toLowerCase().replace(/\s+/g, "");
-	const getSortDate = (item) => {
-		const d = item.completedAt ?? item.date;
-		return d instanceof Date ? d.getTime() : d?.toDate?.()?.getTime?.() ?? 0;
+	const getSortInfo = (item) => {
+		const completed = item.completedAt?.toDate?.();
+		const date = item.date?.toDate?.();
+		return {
+			hasCompletedAt: !!completed,
+			sortValue: (completed || date)?.getTime?.() ?? 0,
+		};
 	};
 
 	useEffect(() => {
@@ -781,15 +763,12 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 			matchedServices = matchedServices.filter((item) =>
 				selectedServices.includes("all") ? true : selectedServices.includes(item.serviceType)
 			);
-			console.log({ matchedServices, selectedServices });
 			matchedServices = matchedServices.filter((item) =>
 				selectedDrivers.includes("all") ? true : selectedDrivers.includes(item.driverName)
 			);
-			console.log({ matchedServices, selectedDrivers });
 			matchedServices = matchedServices.filter((item) =>
 				selectedRoutes.includes("all") ? true : selectedRoutes.includes(item.routeId)
 			);
-			console.log({ matchedServices, selectedRoutes });
 			matchedServices = selectedTransStatusOptions.includes("all")
 				? matchedServices
 				: matchedServices.filter((item) =>
@@ -802,13 +781,23 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 			matchedServices = selectedServiceStatusOptions.includes("all")
 				? matchedServices
 				: matchedServices.filter((item) => selectedServiceStatusOptions.includes(item.serviceStatus));
-			console.log({ matchedServices, selectedTransStatusOptions });
 
 			matchedServices = matchedServices
 				.sort((a, b) => {
-					const aDate = getSortDate(a);
-					const bDate = getSortDate(b);
-					return bDate - aDate;
+					const aInfo = getSortInfo(a);
+					const bInfo = getSortInfo(b);
+
+					// Compare by sortValue (newer first)
+					if (bInfo.sortValue !== aInfo.sortValue) {
+						return bInfo.sortValue - aInfo.sortValue;
+					}
+
+					// Tie-breaker: completedAt entries come before non-completed
+					if (aInfo.hasCompletedAt !== bInfo.hasCompletedAt) {
+						return bInfo.hasCompletedAt ? 1 : -1;
+					}
+
+					return 0;
 				})
 				.filter((item) => processDateWise(item));
 
@@ -828,26 +817,59 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 		selectedServiceStatusOptions,
 	]);
 
+	console.log({
+		filteredData: filteredData.map((item) => ({
+			date: formatUtcDateString(item.date.toDate().toUTCString()),
+			completedAt: item.completedAt?.toDate(),
+		})),
+		completeServices: completeServices.map((item) => ({
+			date: formatUtcDateString(item.date.toDate().toUTCString()),
+			completedAt: item.completedAt?.toDate(),
+		})),
+	});
+
+	let formatUTC = (toDayUtc) => {
+		const utcDate = new Date(toDayUtc);
+
+		// Create a new Date in the user's timezone using same year/month/day, set to 12PM
+		const localNoonDate = new Date(utcDate.getFullYear(), utcDate.getMonth(), utcDate.getDate(), 0, 0, 0);
+
+		// Format to string (optional)
+		// const displayString = localNoonDate.toLocaleString(undefined, {
+		// 	hour: "numeric",
+		// 	minute: "2-digit",
+		// 	hour12: true,
+		// 	year: "numeric",
+		// 	month: "short",
+		// 	day: "numeric",
+		// });
+
+		return localNoonDate;
+	};
+
 	const processDateWise = (item) => {
-		// If it's the initial octo search, don't filter by date at all
-		if (isInitialOctoSearch) {
-		  return true; // Show all services regardless of date
-		}
-	  
 		let date = item.date?.toDate();
+
 		let today = new Date();
-		let todayD = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-		let dateF = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-	  
-		console.log({ todayD, dateF });
-	  
-		if (dateF >= todayD) {
-		  if (item.completedAt) return true;
-		  else return false;
+		let serviceUtc = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+		let toDayUtc = formatUtcDateString(serviceUtc.toUTCString());
+		let dateUtc = formatUtcDateString(date.toUTCString());
+
+		console.log({
+			item,
+			date,
+			serviceUtc,
+			toDayUtc: formatUTC(toDayUtc),
+			dateUtc,
+		});
+
+		if (date >= serviceUtc) {
+			if (item.completedAt && !item?.completedViaServiceHistoryPage) return true;
+			else return false;
 		} else {
-		  return true;
+			return true;
 		}
-	  };
+	};
 
 	const fetchAllRoutesOptions = async () => {
 		try {
@@ -881,7 +903,12 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 		}
 	}, [user]);
 
-	console.log({ isLoading, isFiltering, filteredData });
+	console.log({
+		isLoading,
+		isFiltering,
+		filteredDataForFirstOneCompletedAt: filteredData[0]?.completedAt?.toDate(),
+		filteredDataForFirstOneCreatedAt: filteredData[0]?.date?.toDate(),
+	});
 
 	const handleBillingCheckbox = async (isChecked, serviceId, statusUpdateReason = "") => {
 		let docRef = doc(db, COLLECTIONS.scheduledServices, serviceId);
@@ -1260,7 +1287,18 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 				serviceUpdate.itemized = [...serviceUpdate.itemized, ...newItemized];
 				if (service.status !== SERVICE_STATUS.COMPLETE) {
 					serviceUpdate.status = SERVICE_STATUS.COMPLETE;
-					serviceUpdate.completedAt = Timestamp.now();
+					const originalDate = service.date.toDate();
+					const year = originalDate.getUTCFullYear();
+					const month = originalDate.getUTCMonth();
+					const date = originalDate.getUTCDate();
+
+					// Create a new Date at 12 PM UTC
+					const utcNoonDate = new Date(Date.UTC(year, month, date, 12, 0, 0));
+
+					// Convert back to Firestore Timestamp
+					const updatedTimestamp = Timestamp.fromDate(utcNoonDate);
+					serviceUpdate.completedAt = updatedTimestamp;
+					serviceUpdate.completedViaServiceHistoryPage = true;
 				}
 				console.log({ serviceUpdate });
 				if (service.noWaste) serviceUpdate.noWaste = service.noWaste;
@@ -1791,25 +1829,28 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 	const totalCountData = useMemo(() => {
 		let totalCounts = {};
 
-		filteredData.forEach((item) => {
-			item.serviceSummary?.forEach((container) => {
-				const { subWasteType, quantity, weight } = container;
+		filteredData
+			?.filter((service) => selectedRows.includes(service.id))
+			.forEach((item) => {
+				item.serviceSummary?.forEach((container) => {
+					console.log({ container });
+					const { subWasteType, quantity = 1, weight } = container;
 
-				if (subWasteType === undefined) return;
+					if (subWasteType === undefined) return;
 
-				const qty = Number(quantity);
-				const wgt = Number(weight);
+					const qty = Number(quantity);
+					const wgt = Number(weight);
 
-				if (isNaN(qty) || isNaN(wgt)) return;
+					if (isNaN(qty) || isNaN(wgt)) return;
 
-				totalCounts[subWasteType] = totalCounts[subWasteType] || {
-					quantity: 0,
-					weight: 0,
-				};
-				totalCounts[subWasteType].quantity += qty;
-				totalCounts[subWasteType].weight += wgt;
+					totalCounts[subWasteType] = totalCounts[subWasteType] || {
+						quantity: 0,
+						weight: 0,
+					};
+					totalCounts[subWasteType].quantity += qty;
+					totalCounts[subWasteType].weight += wgt;
+				});
 			});
-		});
 		Object.keys(totalCounts).forEach((key) => {
 			const { quantity, weight } = totalCounts[key];
 			if (isNaN(quantity) || isNaN(weight)) {
@@ -1818,7 +1859,9 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 		});
 
 		return totalCounts;
-	}, [filteredData]);
+	}, [selectedRows]);
+
+	console.log({ totalCountData, selectedRows });
 
 	return (
 		<div
@@ -1853,7 +1896,7 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 					selectedServiceStatusOptions={selectedServiceStatusOptions}
 					setSelectedTransStatusOptions={setSelectedTransStatusOptions}
 					setSelectedServiceStatusOptions={setSelectedServiceStatusOptions}
-					setIsInitialOctoSearch={setIsInitialOctoSearch}
+					setDateFilterManuallyChanged={setDateFilterManuallyChanged}
 				/>
 			</div>
 			<div className={`flex flex-col w-full font-medium overflow-y-scroll`}>
@@ -1880,303 +1923,322 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 						<div className="truncate w-40 text-center">Transfer Status</div>
 					</div>
 				</div>
-				<div className="flex flex-col w-fit overflow-y-auto">
-					{!isFiltering && !isLoading && filteredData.length == 0 && (
-						<div className="flex h-40  w-screen text-cardTextGray text-xl justify-center items-center">
-							<p>No result found</p>
-						</div>
-					)}
-
-					{filteredData.map((service, index) => (
-						<div key={service.id} className="py-2 w-fit font-normal border-b">
-							<DataTable
-								handleRowCheckbox={handleRowCheckbox}
-								selectedRows={selectedRows}
-								service={service}
-								transporterData={transporterData}
-							/>
-							<div className="flex w-full overflow-hidden gap-6 border-dashInActiveBtnText px-6 pl-10">
-								<div className="w-[55%] border border-dashInActiveBtnText overflow-hidden">
-									<div className="w-full bg-lightGray flex h-12 items-center justify-center gap-2">
-										<h6 className="font-medium text-center">Service Summary</h6>
-										{editing.serviceId === service.id && editing.section === "service" ? (
-											<>
-												<button className="text-primary text-sm" onClick={() => handleSave(service.id)}>
-													Save
-												</button>
-												<button
-													className="text-cardTextGray text-sm"
-													onClick={() => {
-														setEditing({
-															serviceId: null,
-															section: null,
-															consentAcceptance: false,
-														});
-														setNewContainers([]);
-														setEditedData({});
-													}}
-												>
-													Cancel
-												</button>
-											</>
-										) : (
-											service.transferStatus !== transferStatusType.COMPLETE && (
-												<button className="text-primary text-sm" onClick={() => handleEditClick(service.id, "service")}>
-													(Edit)
-												</button>
-											)
-										)}
-									</div>
-									<div className="px-4 pb-2">
-										<>
-											{service.serviceSummary?.length == 0 &&
-												service.noWaste &&
-												(editing.section == "service" && editing.serviceId == service.id ? (
-													<p className="text-center py-2"></p>
-												) : (
-													<p className="text-center py-2">Delivery Only</p>
-												))}
-										</>
-										{service.serviceSummary?.length > 0 && (
-											<div className="flex gap-2 text-left py-2 font-medium">
-												<p className="w-[20%]">Subwaste Type</p>
-												<p className="w-[30%]">Container</p>
-												<p className="w-[8%]">Qty</p>
-												<p className="w-[10%]">Weight</p>
-												<p className="w-[8%]">Rate</p>
-												<p className="w-[8%]">Total</p>
-												<p className="w-[8%]">Cost</p>
-												<p className="w-[8%]">
-													{editing.serviceId === service.id && editing.section === "service" && "Delete"}
-												</p>
-											</div>
-										)}
-										{Object.entries(
-											groupContainers(
-												editing.serviceId === service.id && editing.section === "service"
-													? [...editedData.serviceSummary]
-													: service.serviceSummary,
-												service.manifestData
-											)
-										).map(([subWasteType, group], i, arr) => {
-											let groupTotal = 0;
-											const subtotal = group.containers.reduce(
-												(acc, container) => {
-													const quantity = Number(container.quantity) || 0;
-													const weight = Number(container.weight) || 0;
-													const rate = Number(container.priceBookData?.rate) || 0;
-
-													return {
-														quantity: acc.quantity + quantity,
-														weight: acc.weight + weight,
-														total: acc.total + quantity * rate,
-													};
-												},
-												{ quantity: 0, weight: 0, total: 0, cost: 0 }
-											);
-
-											return (
-												<div key={subWasteType} className={`${i < arr.length - 1 ? "border-b border-black/40" : ""}`}>
-													<button
-														className="text-left text-primary hover:underline"
-														onClick={() => handleManifestView(group?.manifest?.id, group.manifest?.url)}
-													>
-														{group?.manifest?.manifestOctoId || ""}
-													</button>
-
-													{group.containers.map((summary, idx) => {
-														const rate = Number(summary.priceBookData?.pricePerPound) || 0;
-
-														const containerTotal =
-															Number(summary.weight) * Number(summary.priceBookData?.pricePerPound);
-														groupTotal += containerTotal;
-
-														return (
-															<div
-																key={summary.id || summary.tempId}
-																className="flex items-center gap-2 my-1 text-left"
-															>
-																{editing.serviceId === service.id && editing.section === "service" ? (
-																	<>
-																		{/* Subwaste Type */}
-																		<div className="w-[20%]">
-																			{subWasteTypesMap[summary.subWasteType] || summary.subWasteType}
-																		</div>
-
-																		{/* Container Type Dropdown */}
-																		<select
-																			value={summary.containerType}
-																			onChange={(e) =>
-																				handleSubWasteTypeChange(
-																					service.id,
-																					"serviceSummary",
-																					idx,
-																					"containerType",
-																					e.target.value,
-																					subWasteType,
-																					summary.id || summary.tempId
-																				)
-																			}
-																			className="border rounded p-0.5 w-[30%] px-1"
-																		>
-																			<option value="" disabled hidden></option>
-																			{Object.entries(containerPriceBook)
-																				.filter(([value, data]) => data.subWasteType == summary.subWasteType)
-																				.map(([value, data]) => (
-																					<option key={value} value={value}>
-																						{data.labelOCTOFieldApp}
-																					</option>
-																				))}
-																		</select>
-
-																		{/* Quantity Input */}
-																		<input
-																			className="border-b focus:outline-none w-[8%] px-1"
-																			value={Number(summary.quantity)}
-																			type="number"
-																			disabled={summary.serviceType == "ITEMIZED"}
-																			min={1}
-																			onChange={(e) =>
-																				handleFieldChange(
-																					service.id,
-																					"serviceSummary",
-																					idx,
-																					"quantity",
-																					e.target.value,
-																					summary.id || summary.tempId
-																				)
-																			}
-																		/>
-
-																		{/* Weight Input */}
-																		<input
-																			className="border-b focus:outline-none w-[10%] px-1"
-																			value={Number(summary.weight)}
-																			type="number"
-																			min={0}
-																			onChange={(e) =>
-																				handleFieldChange(
-																					service.id,
-																					"serviceSummary",
-																					idx,
-																					"weight",
-																					e.target.value,
-																					summary.id || summary.tempId
-																				)
-																			}
-																		/>
-
-																		{/* Rate Display */}
-																		<div className="w-[8%]">${rate}</div>
-
-																		{/* Total Display */}
-																		<div className="w-[8%]">${containerTotal.toFixed(2)}</div>
-
-																		{/* Cost Display */}
-																		<div className="w-[8%]">{summary.cost ? `$${Number(summary.cost) / 100}` : ""}</div>
-
-																		{/* Delete Button */}
-																		<button
-																			onClick={() => {
-																				console.log({ summary });
-																				setIsDeleting({
-																					serviceId: service.id,
-																					containerId: summary.id ?? summary.tempId,
-																					section: "service",
-																				});
-																			}}
-																			className="text-red-500 w-[8%] hover:text-red-700"
-																		>
-																			<BiTrash className="w-4 h-4" />
-																		</button>
-																	</>
-																) : (
-																	<>
-																		<p className="w-[20%]">
-																			{subWasteTypesMap[summary.subWasteType] ?? summary.subWasteType ?? "--"}
-																		</p>
-																		<p className="w-[30%]">{containersMap[summary.containerType] ?? "--"}</p>
-																		<p className="w-[8%]">{summary.quantity}</p>
-																		<p className="w-[10%]">{summary.weight}</p>
-																		<p className="w-[8%]">${Number(summary.priceBookData?.pricePerPound).toFixed(2)}</p>
-																		<p className="w-[8%]">
-																			$
-																			{(
-																				Number(summary.quantity) *
-																				Number(summary.weight) *
-																				Number(summary.priceBookData?.pricePerPound)
-																			).toFixed(2)}
-																		</p>
-																		<p className="w-[8%]">{summary.cost ? `$${Number(summary.cost) / 100}` : ""}</p>
-																		<p className="w-[8%]"></p>
-																	</>
-																)}
-															</div>
-														);
-													})}
-
-													{/* Subtotal Row */}
-													<div className="flex items-center gap-2 my-1 text-left font-semibold bg-gray-50 p-1">
-														<p className="w-[20%]">Subtotal</p>
-														<p className="w-[30%]"></p>
-														<p className="w-[8%]">{subtotal.quantity}</p>
-														<p className="w-[10%]">{subtotal.weight.toFixed(2)}</p>
-														<p className="w-[8%]"></p>
-														<p className="w-[8%]">${groupTotal.toFixed(2)}</p>
-														<p className="w-[8%]"></p>
-														<p className="w-[8%]"></p>
-													</div>
-												</div>
-											);
-										})}
-										{editing.serviceId === service.id && editing.section === "service" && (
-											<div className="flex gap-2 mt-2">
-												<button className="text-primary text-sm" onClick={() => handleAddNewContainer(service.id)}>
-													+ Add Container
-												</button>
-											</div>
-										)}
-									</div>
-								</div>
-								<DeliverySummaryContainer
-									delContainersMap={delContainersMap}
-									editedData={editedData}
-									editing={editing}
-									handleAddNewDelContainer={handleAddNewDelContainer}
-									handleEditClick={handleEditClick}
-									handleFieldChange={handleFieldChange}
-									handleNewDelContainerChange={handleNewDelContainerChange}
-									handleRemoveNewDelContainer={handleAddNewDelContainer}
-									handleSave={handleSave}
-									newDelContainers={newDelContainers}
-									service={service}
-									setEditedData={setEditedData}
-									setEditing={setEditing}
-									setIsDeleting={setIsDeleting}
-									setNewDelContainers={setNewDelContainers}
-								/>
-								<OptionsContainer
-									handleBillingCheckbox={handleBillingCheckbox}
-									handlePaidCheckbox={handlePaidCheckbox}
-									handleApprovedCheckbox={handleApprovedCheckbox}
-									service={service}
-								/>
+				{isLoading ? (
+					<Loader height="h-20 py-4 w-screen" />
+				) : (
+					<div className="flex flex-col w-fit overflow-y-auto">
+						{!isFiltering && !isLoading && filteredData.length == 0 && (
+							<div className="flex h-40  w-screen text-cardTextGray text-xl justify-center items-center">
+								<p>No result found</p>
 							</div>
-							<PictureSection service={service} />
-						</div>
-					))}
-					{isLoading && <Loader height="h-20 py-4 w-screen" />}
-					{!isLoading && hasMore && (
-						<div className="flex justify-center my-4 h-fit w-screen">
-							<button
-								onClick={loadMore}
-								className="px-2 py-1 bg-creamWhite border border-cardTextGray rounded hover:bg-primary-dark"
-							>
-								Load More
-							</button>
-						</div>
-					)}
-				</div>
+						)}
+
+						{filteredData.map((service, index) => (
+							<div key={service.id} className="py-2 w-fit font-normal border-b">
+								<DataTable
+									handleRowCheckbox={handleRowCheckbox}
+									selectedRows={selectedRows}
+									service={service}
+									transporterData={transporterData}
+								/>
+								<div className="flex w-full overflow-hidden gap-6 border-dashInActiveBtnText px-6 pl-10">
+									<div className="w-[55%] border border-dashInActiveBtnText overflow-hidden">
+										<div className="w-full bg-lightGray flex h-12 items-center justify-center gap-2">
+											<h6 className="font-medium text-center">Service Summary</h6>
+											{editing.serviceId === service.id && editing.section === "service" ? (
+												<>
+													<button className="text-primary text-sm" onClick={() => handleSave(service.id)}>
+														Save
+													</button>
+													<button
+														className="text-cardTextGray text-sm"
+														onClick={() => {
+															setEditing({
+																serviceId: null,
+																section: null,
+																consentAcceptance: false,
+															});
+															setNewContainers([]);
+															setEditedData({});
+														}}
+													>
+														Cancel
+													</button>
+												</>
+											) : (
+												service.transferStatus !== transferStatusType.COMPLETE && (
+													<button
+														className="text-primary text-sm"
+														onClick={() => handleEditClick(service.id, "service")}
+													>
+														(Edit)
+													</button>
+												)
+											)}
+										</div>
+										<div className="px-4 pb-2">
+											<>
+												{service.serviceSummary?.length == 0 &&
+													service.noWaste &&
+													(editing.section == "service" && editing.serviceId == service.id ? (
+														<p className="text-center py-2"></p>
+													) : (
+														<p className="text-center py-2">Delivery Only</p>
+													))}
+											</>
+											{service.serviceSummary?.length > 0 && (
+												<div className="flex gap-2 text-left py-2 font-medium">
+													<p className="w-[20%]">Subwaste Type</p>
+													<p className="w-[30%]">Container</p>
+													<p className="w-[8%]">Qty</p>
+													<p className="w-[10%]">Weight</p>
+													<p className="w-[8%]">Rate</p>
+													<p className="w-[8%]">Total</p>
+													<p className="w-[8%]">Cost</p>
+													<p className="w-[8%]">
+														{editing.serviceId === service.id && editing.section === "service" && "Delete"}
+													</p>
+												</div>
+											)}
+											{Object.entries(
+												groupContainers(
+													editing.serviceId === service.id && editing.section === "service"
+														? [...editedData.serviceSummary]
+														: service.serviceSummary,
+													service.manifestData
+												)
+											).map(([subWasteType, group], i, arr) => {
+												let groupTotal = 0;
+												const subtotal = group.containers.reduce(
+													(acc, container) => {
+														const quantity = Number(container.quantity) || 1;
+														const weight = Number(container.weight) || 0;
+														const rate = Number(container.priceBookData?.rate) || 0;
+
+														return {
+															quantity: acc.quantity + quantity,
+															weight: acc.weight + weight,
+															total: acc.total + quantity * rate,
+														};
+													},
+													{ quantity: 0, weight: 0, total: 0, cost: 0 }
+												);
+
+												return (
+													<div key={subWasteType} className={`${i < arr.length - 1 ? "border-b border-black/40" : ""}`}>
+														<button
+															className="text-left text-primary hover:underline"
+															onClick={() => handleManifestView(group?.manifest?.id, group.manifest?.url)}
+														>
+															{group?.manifest?.manifestOctoId || ""}
+														</button>
+
+														{group.containers.map((summary, idx) => {
+															const rate = Number(summary.priceBookData?.pricePerPound) || 0;
+
+															const containerTotal =
+																Number(summary.weight) * Number(summary.priceBookData?.pricePerPound);
+															groupTotal += containerTotal;
+
+															return (
+																<div
+																	key={summary.id || summary.tempId}
+																	className="flex items-center gap-2 my-1 text-left"
+																>
+																	{editing.serviceId === service.id && editing.section === "service" ? (
+																		<>
+																			{/* Subwaste Type */}
+																			<div className="w-[20%]">
+																				{subWasteTypesMap[summary.subWasteType] || summary.subWasteType}
+																			</div>
+
+																			{/* Container Type Dropdown */}
+																			<select
+																				value={summary.containerType}
+																				onChange={(e) =>
+																					handleSubWasteTypeChange(
+																						service.id,
+																						"serviceSummary",
+																						idx,
+																						"containerType",
+																						e.target.value,
+																						subWasteType,
+																						summary.id || summary.tempId
+																					)
+																				}
+																				className="border rounded p-0.5 w-[30%] px-1"
+																			>
+																				<option value="" disabled hidden></option>
+																				{Object.entries(containerPriceBook)
+																					.filter(([value, data]) => data.subWasteType == summary.subWasteType)
+																					.map(([value, data]) => (
+																						<option key={value} value={value}>
+																							{data.labelOCTOFieldApp}
+																						</option>
+																					))}
+																			</select>
+
+																			{/* Quantity Input */}
+																			<input
+																				className="border-b focus:outline-none w-[8%] px-1"
+																				value={Number(summary.quantity)}
+																				type="number"
+																				disabled={summary.serviceType == "ITEMIZED"}
+																				min={1}
+																				onChange={(e) =>
+																					handleFieldChange(
+																						service.id,
+																						"serviceSummary",
+																						idx,
+																						"quantity",
+																						e.target.value,
+																						summary.id || summary.tempId
+																					)
+																				}
+																			/>
+
+																			{/* Weight Input */}
+																			<input
+																				className="border-b focus:outline-none w-[10%] px-1"
+																				value={Number(summary.weight)}
+																				type="number"
+																				min={0}
+																				onChange={(e) =>
+																					handleFieldChange(
+																						service.id,
+																						"serviceSummary",
+																						idx,
+																						"weight",
+																						e.target.value,
+																						summary.id || summary.tempId
+																					)
+																				}
+																			/>
+
+																			{/* Rate Display */}
+																			<div className="w-[8%]">${rate}</div>
+
+																			{/* Total Display */}
+																			<div className="w-[8%]">${containerTotal.toFixed(2)}</div>
+
+																			{/* Cost Display */}
+																			<div className="w-[8%]">
+																				{summary.cost ? `$${Number(summary.cost) / 100}` : ""}
+																			</div>
+
+																			{/* Delete Button */}
+																			<button
+																				onClick={() => {
+																					console.log({ summary });
+																					setIsDeleting({
+																						serviceId: service.id,
+																						containerId: summary.id ?? summary.tempId,
+																						section: "service",
+																					});
+																				}}
+																				className="text-red-500 w-[8%] hover:text-red-700"
+																			>
+																				<BiTrash className="w-4 h-4" />
+																			</button>
+																		</>
+																	) : (
+																		<>
+																			<p className="w-[20%]">
+																				{subWasteTypesMap[summary.subWasteType] ?? summary.subWasteType ?? "--"}
+																			</p>
+																			<p
+																				className={`${
+																					service.expectedItemOrService?.includes(summary.containerType)
+																						? ""
+																						: "text-red-500"
+																				} w-[30%]`}
+																			>
+																				{containersMap[summary.containerType] ?? "--"}
+																			</p>
+																			<p className="w-[8%]">{summary.quantity ?? 1}</p>
+																			<p className="w-[10%]">{summary.weight}</p>
+																			<p className="w-[8%]">
+																				${Number(summary.priceBookData?.pricePerPound).toFixed(2)}
+																			</p>
+																			<p className="w-[8%]">
+																				$
+																				{(
+																					Number(summary.quantity ?? 1) *
+																					Number(summary.weight) *
+																					Number(summary.priceBookData?.pricePerPound)
+																				).toFixed(2)}
+																			</p>
+																			<p className="w-[8%]">{summary.cost ? `$${Number(summary.cost) / 100}` : ""}</p>
+																			<p className="w-[8%]"></p>
+																		</>
+																	)}
+																</div>
+															);
+														})}
+
+														{/* Subtotal Row */}
+														<div className="flex items-center gap-2 my-1 text-left font-semibold bg-gray-50 p-1">
+															<p className="w-[20%]">Subtotal</p>
+															<p className="w-[30%]"></p>
+															<p className="w-[8%]">{subtotal.quantity}</p>
+															<p className="w-[10%]">{subtotal.weight.toFixed(2)}</p>
+															<p className="w-[8%]"></p>
+															<p className="w-[8%]">${groupTotal.toFixed(2)}</p>
+															<p className="w-[8%]"></p>
+															<p className="w-[8%]"></p>
+														</div>
+													</div>
+												);
+											})}
+											{editing.serviceId === service.id && editing.section === "service" && (
+												<div className="flex gap-2 mt-2">
+													<button className="text-primary text-sm" onClick={() => handleAddNewContainer(service.id)}>
+														+ Add Container
+													</button>
+												</div>
+											)}
+										</div>
+									</div>
+									<DeliverySummaryContainer
+										delContainersMap={delContainersMap}
+										editedData={editedData}
+										editing={editing}
+										handleAddNewDelContainer={handleAddNewDelContainer}
+										handleEditClick={handleEditClick}
+										handleFieldChange={handleFieldChange}
+										handleNewDelContainerChange={handleNewDelContainerChange}
+										handleRemoveNewDelContainer={handleAddNewDelContainer}
+										handleSave={handleSave}
+										newDelContainers={newDelContainers}
+										service={service}
+										setEditedData={setEditedData}
+										setEditing={setEditing}
+										setIsDeleting={setIsDeleting}
+										setNewDelContainers={setNewDelContainers}
+									/>
+									<OptionsContainer
+										handleBillingCheckbox={handleBillingCheckbox}
+										handlePaidCheckbox={handlePaidCheckbox}
+										handleApprovedCheckbox={handleApprovedCheckbox}
+										service={service}
+									/>
+								</div>
+								<PictureSection service={service} />
+							</div>
+						))}
+						{isLoadingMore && <Loader height="h-20 py-4 w-screen" />}
+						{!isLoading && !isLoadingMore && hasMore && filteredData.length && (
+							<div className="flex justify-center my-4 h-fit w-screen">
+								<button
+									onClick={loadMore}
+									className="px-2 py-1 bg-creamWhite border border-cardTextGray rounded hover:bg-primary-dark"
+								>
+									Load More
+								</button>
+							</div>
+						)}
+					</div>
+				)}
 			</div>
 			{editing.section && editing.serviceId && !editing.consentAcceptance && (
 				<div className="z-40 fixed inset-0 bg-mediumGray bg-opacity-50 flex justify-center items-center ">
@@ -2243,7 +2305,7 @@ const [isInitialOctoSearch, setIsInitialOctoSearch] = useState(false);
 												assignedServiceVehicleName: vehicle.label,
 											};
 
-											console.log({ toUpdate, selectedDriver, selectedVehicle });
+											console.log({ toUpdate, selectedDriver, selectedVehicle, serviceId: editing.serviceId });
 
 											let docRef = doc(db, "scheduledServices", editing.serviceId);
 
@@ -2444,7 +2506,7 @@ const NewContainerModalHandler = ({
 						<input
 							type="text"
 							className="w-full p-2 border rounded"
-							placeholder="Quantity"
+							placeholder="Serial Number"
 							value={newContainerData.serialNumber}
 							onChange={(e) => {
 								setNewContainerData((prev) => ({
@@ -2566,7 +2628,7 @@ const NewContainerModalHandler = ({
 									rate: 0,
 									total: 0,
 									cost: 0,
-									serviceType: containerData.serviceType ?? "",
+									serviceType: containerData?.serviceType ?? "",
 								});
 							}}
 						>
@@ -2581,7 +2643,7 @@ const NewContainerModalHandler = ({
 
 const CounterHandler = ({ totalCountData }) => {
 	return (
-		<div className="bg-whiteBlue font-medium min-h-12 h-16 p-4 px-10 w-full min-w-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
+		<div className="bg-whiteBlue font-medium h-fit p-4 px-10 w-full min-w-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
 			{Object.entries(totalCountData).map(([key, value]) => (
 				<div className="flex gap-1" key={key}>
 					<p className="font-medium">
@@ -2982,29 +3044,19 @@ const FilterComp = ({
 	selectedServiceStatusOptions,
 	setSelectedTransStatusOptions,
 	setSelectedServiceStatusOptions,
-	setIsInitialOctoSearch
+	setDateFilterManuallyChanged,
 }) => {
 	const clearFilters = () => {
 		setSearchQuery("");
+		setTo(() => new Date());
+		setFrom(() => new Date());
 		setSelectedRoutes(["all", ...routeOptions.map((item) => item.value)]);
-		setSelectedServices(["all", ...serviceTypeOptions.map((item) => item.value)]);
 		setSelectedDrivers(["all", ...driverOptions.map((item) => item.value)]);
+		setSelectedServices(["all", ...serviceTypeOptions.map((item) => item.value)]);
 		setSelectedTransStatusOptions([...transStatusOptions.map((item) => item.value)]);
 		setSelectedServiceStatusOptions([...serviceStatusOptions.map((item) => item.value)]);
 	};
 
-	// Add these functions to handle date picker changes
-	const handleFromDateChange = (date) => {
-		setFrom(date);
-		// If this was a manual change, no longer use the initial octo search mode
-		setIsInitialOctoSearch(false);
-	  };
-	  
-	  const handleToDateChange = (date) => {
-		setTo(date);
-		// If this was a manual change, no longer use the initial octo search mode
-		setIsInitialOctoSearch(false);
-	  };
 	return (
 		<>
 			<div className="px-8 flex items-center justify-between">
@@ -3028,14 +3080,22 @@ const FilterComp = ({
 						<p className="text-sm text-gray-500 px-2">From</p>
 						<CustomDatePicker
 							selectedDate={from}
-							setSelectedDate={(value) => setFrom(new Date(value))}
+							setSelectedDate={(value) => {
+								setFrom(new Date(value));
+								setDateFilterManuallyChanged(true);
+							}}
 							label={"From Date"}
-							onChange={handleFromDateChange}
 						/>
 					</div>
 					<div className="flex flex-col min-w-52">
 						<p className="text-sm text-gray-500 px-2">To</p>
-						<CustomDatePicker selectedDate={to} setSelectedDate={(value) => setTo(new Date(value))} label={"To Date"} onChange={handleToDateChange}/>
+						<CustomDatePicker
+							selectedDate={to}
+							setSelectedDate={(value) => {
+								setTo(new Date(value));
+							}}
+							label={"To Date"}
+						/>
 					</div>
 					<MultiselectDropdown
 						width="w-48"
@@ -3148,7 +3208,9 @@ const DataTable = ({ service, selectedRows, handleRowCheckbox, transporterData }
 			</div>
 			<div className="flex items-center">
 				<div className="truncate w-60">
-					{service.completedAt
+					{service.completedViaServiceHistoryPage
+						? formatUtcDateTimeString(service.completedAt?.toDate()?.toUTCString())
+						: service.completedAt
 						? formattedDateTime(service.completedAt)
 						: formatUtcDateString(service.date.toDate().toUTCString())}
 				</div>
