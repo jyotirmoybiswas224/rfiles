@@ -225,10 +225,15 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	useEffect(() => {
 		if (serviceType) {
-			setValue("serviceSchedules.expectedItemOrService", []);
-			trigger("serviceSchedules.expectedItemOrService");
+			// Only reset containers if we shouldn't keep them
+			if (!KeepContainers) {
+				setValue("serviceSchedules.expectedItemOrService", []);
+				trigger("serviceSchedules.expectedItemOrService");
+			}
+			// Reset the flag after use
+			setKeepContainers(false);
 		}
-	}, [serviceType, setValue, trigger]);
+	}, [serviceType, setValue, trigger, KeepContainers]);
 
 	useEffect(() => {
 		const form = instructionsSectionRef.current;
@@ -1338,21 +1343,18 @@ const handleSubcontractorSelected = async (subcontractorId) => {
       const prevValue = formData.serviceType;
       console.log("Service type changed from", prevValue, "to", e);
       
-      // First update the service type value
+      // Set KeepContainers flag BEFORE updating service type
+      const shouldKeepContainers = 
+        (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+        (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
+        (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+        (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING);
+      
+      setKeepContainers(shouldKeepContainers);
+      
+      // Now update the service type value
       setValue("serviceSchedules.serviceType", e);
       trigger("serviceSchedules.serviceType");
-      
-      // Use the EXACT same condition as in the working component
-      if (
-        (
-          (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
-          (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
-          (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
-          (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING)
-        )
-      ) {
-       setKeepContainers(true)
-      }
     }
   }}
   isRequired
@@ -1431,23 +1433,23 @@ const handleSubcontractorSelected = async (subcontractorId) => {
               : itemsMap?.[itemObj.item]}
           </span>
           <div className="relative w-2/3">
-            <input
-              min="1"
-              max="999"
-              value={itemObj.quantity || 1}
-              onChange={(e) => {
-				console.log("keepContainer",KeepContainers);
-				
-                if (isReadOnly&&KeepContainers) return;
-                const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-                const updatedItems = [...formData.expectedItemOrService];
-                updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-                setValue("serviceSchedules.expectedItemOrService", updatedItems);
-                trigger("serviceSchedules.expectedItemOrService");
-              }}
-              disabled={isReadOnly || !hasSubcontractorSelected}
-              className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
-            />
+          <input
+  min="1"
+  max="999"
+  value={itemObj.quantity || 1}
+  onChange={(e) => {
+    // Only block changes when in read-only mode AND NOT keeping containers
+    if (isReadOnly && !KeepContainers) return;
+    
+    const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+    const updatedItems = [...formData.expectedItemOrService];
+    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+    setValue("serviceSchedules.expectedItemOrService", updatedItems);
+    trigger("serviceSchedules.expectedItemOrService");
+  }}
+  disabled={isReadOnly || !hasSubcontractorSelected}
+  className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
+/>
 
             {!isReadOnly && hasSubcontractorSelected && (
               <>
