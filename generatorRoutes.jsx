@@ -169,6 +169,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
 	const [activeSentSSRs, setActiveSentSSRs] = useState([]);
 	const [transporterName, setTransporterName] = useState("");
+	const [KeepContainers,setKeepContainers] = useState(false)
 	const [serviceFrequencyOptions, setServiceFrequencyOptions] = useState([
 		...frequencyPrimaryOptions,
 		...frequencySecondaryOptions,
@@ -329,27 +330,102 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			if (unsubscribe) unsubscribe();
 		};
 	}, [user]);
-	useEffect(() => {
-		let unsubscribe = onSnapshot(collection(db, COLLECTIONS.defaultPriceBook, "services", "containers"), (snap) => {
-			if (snap.docs.length) {
-				let tempOptions = [];
-				let tempMap = {};
-				snap.docs.forEach((el) => {
-					tempOptions.push({
-						label: el.data()?.masterItemName ?? "--",
-						value: el.id,
-						subWasteType: el.data()?.subWasteType,
-					});
-					tempMap[el.id] = el.data()?.masterItemName ?? "--";
-				});
-				setItemsOptions(tempOptions);
-				setItemsMap(tempMap);
-			}
-		});
-		return () => {
-			if (unsubscribe) unsubscribe();
-		};
-	}, []);
+	// useEffect(() => {
+	// 	let unsubscribe = onSnapshot(collection(db,"priceBooks",transporterId,"default", "services", "containers"), (snap) => {
+	// 		if (snap.docs.length) {
+	// 			let tempOptions = [];
+	// 			let tempMap = {};
+	// 			snap.docs.forEach((el) => {
+	// 				tempOptions.push({
+	// 					label: el.data()?.masterItemName ?? "--",
+	// 					value: el.id,
+	// 					subWasteType: el.data()?.subWasteType,
+	// 				});
+	// 				tempMap[el.id] = el.data()?.masterItemName ?? "--";
+	// 			});
+	// 			setItemsOptions(tempOptions);
+	// 			setItemsMap(tempMap);
+	// 		}
+	// 	});
+	// 	return () => {
+	// 		if (unsubscribe) unsubscribe();
+	// 	};
+	// }, []);
+const [subContractorContainers, setSubContractorContainers] = useState([]);
+
+const fetchContainers = async (transporterId) => {
+  if (!transporterId) {
+    console.log("No transporter ID provided");
+    return [];
+  }
+
+  try {
+    return new Promise((resolve, reject) => {
+      const unsubscribe = onSnapshot(
+        collection(db, "priceBooks", transporterId, "default", "services", "containers"),
+        (snap) => {
+          let tempOptions = [];
+          let tempMap = {};
+          
+          if (snap.docs.length) {
+            snap.docs.forEach((el) => {
+              tempOptions.push({
+                label: el.data()?.masterItemName ?? "--",
+                value: el.id,
+                subWasteType: el.data()?.subWasteType,
+              });
+              tempMap[el.id] = el.data()?.masterItemName ?? "--";
+            });
+            
+            setItemsMap(prevMap => ({...prevMap, ...tempMap}));
+          } else {
+            console.log(`No containers found for transporter: ${transporterId}`);
+          }
+          unsubscribe();
+          resolve(tempOptions);
+        },
+        (error) => {
+          console.error("Error fetching containers:", error);
+          unsubscribe();
+          reject(error);
+        }
+      );
+    });
+  } catch (error) {
+    console.error("Error setting up container listener:", error);
+    return [];
+  }
+};
+
+useEffect(() => {
+	if (user?.uid) {
+	  const loadTransporterContainers = async () => {
+		try {
+		  const containers = await fetchContainers(user.uid);
+		  setItemsOptions(containers);
+		} catch (error) {
+		  console.error("Failed to load initial containers:", error);
+		}
+	  };
+	  
+	  loadTransporterContainers();
+	}
+  }, [user?.uid]);
+
+const handleSubcontractorSelected = async (subcontractorId) => {
+	if (!subcontractorId) {
+	  setSubContractorContainers([]);
+	  return;
+	}
+	
+	try {
+	  const containers = await fetchContainers(subcontractorId);
+	  setSubContractorContainers(containers);
+	} catch (error) {
+	  console.error("Failed to fetch subcontractor containers:", error);
+	  setSubContractorContainers([]);
+	}
+  };
 
 	useEffect(() => {
 		if (!generatorData) return;
@@ -962,6 +1038,10 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			</div>
 		);
 	};
+	// const isSubcontractorSelected = () => {
+	// 	const selectedSubcontractor = getValues("selectedSubContractor");
+	// 	return selectedSubcontractor !== null && selectedSubcontractor !== undefined;
+	//   };
 
 	const renderSSRForm = (isReadOnly, ssrData) => {
 		console.log("ssr data", ssrData);
@@ -1102,6 +1182,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		{
 			console.log("subconytractorData", subContractorData);
 		}
+		const selectedSubcontractor = getValues("selectedSubContractor");
+
+		const hasSubcontractorSelected = isReadOnly || selectedSubcontractor;
 		const getDropdownOptions = () => {
 			return subContractorData
 				?.filter((subContractor) => subContractor.contractorName || subContractor.name)
@@ -1125,10 +1208,13 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								value={formData.selectedSubContractor ? JSON.stringify(formData.selectedSubContractor) : ""}
 								onChange={(selectedValue) => {
 									if (!isReadOnly) {
-										setValue("selectedSubContractor", JSON.parse(selectedValue));
-										trigger("selectedSubContractor");
+									  const selectedSubcontractor = JSON.parse(selectedValue);
+									  setValue("selectedSubContractor", selectedSubcontractor);
+									  trigger("selectedSubContractor");
+									  setValue("serviceSchedules.expectedItemOrService", []);
+									  handleSubcontractorSelected(selectedSubcontractor.id);
 									}
-								}}
+								  }}
 								isRequired
 								listHeight="max-h-64"
 								isDisabled={isReadOnly || formData.isReceivedSSR}
@@ -1150,7 +1236,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 							}}
 							isRequired
 							listHeight="max-h-64"
-							isDisabled={isReadOnly}
+							isDisabled={isReadOnly||!hasSubcontractorSelected}
 						/>
 						{!isReadOnly && errors.serviceSchedules?.serviceFrequency?.type && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceFrequency.type.message}</p>
@@ -1184,7 +1270,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 												id={`ssr-weekdays-input`}
 												styles="flex flex-col w-full gap-1"
 												margin="0"
-												isDisabled={isReadOnly}
+												isDisabled={isReadOnly||!hasSubcontractorSelected}
 											/>
 										)}
 									</div>
@@ -1216,7 +1302,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 										endYear={new Date().getFullYear() + 5}
 										yearReversed={true}
 										minDate={new Date()}
-										disabled={isReadOnly}
+										isDisabled={isReadOnly||!hasSubcontractorSelected}
 									/>
 								)}
 							</div>
@@ -1237,25 +1323,41 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					</div>
 
 					<div className="w-1/2 space-y-4">
-						<Dropdown
-							label="Service Type"
-							options={serviceTypes.map((item) => ({
-								label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
-								value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
-								isDisabled: item.value === "HAZARDOUS_WASTE",
-							}))}
-							disabledBgColor="white"
-							disabledTextColor="gray-300"
-							value={formData.serviceType}
-							onChange={(e) => {
-								if (!isReadOnly) {
-									setValue("serviceSchedules.serviceType", e);
-									trigger("serviceSchedules.serviceType");
-								}
-							}}
-							isRequired
-							isDisabled={isReadOnly}
-						/>
+					<Dropdown
+  label="Service Type"
+  options={serviceTypes.map((item) => ({
+    label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
+    value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
+    isDisabled: item.value === "HAZARDOUS_WASTE",
+  }))}
+  disabledBgColor="white"
+  disabledTextColor="gray-300"
+  value={formData.serviceType}
+  onChange={(e) => {
+    if (!isReadOnly) {
+      const prevValue = formData.serviceType;
+      console.log("Service type changed from", prevValue, "to", e);
+      
+      // First update the service type value
+      setValue("serviceSchedules.serviceType", e);
+      trigger("serviceSchedules.serviceType");
+      
+      // Use the EXACT same condition as in the working component
+      if (
+        (
+          (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+          (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
+          (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+          (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING)
+        )
+      ) {
+       setKeepContainers(true)
+      }
+    }
+  }}
+  isRequired
+  isDisabled={isReadOnly || !hasSubcontractorSelected}
+/>
 						{!isReadOnly && errors.serviceSchedules?.serviceType && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
 						)}
@@ -1271,111 +1373,121 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								}
 							}}
 							isRequired
-							isDisabled={isReadOnly}
+							isDisabled={isReadOnly||!hasSubcontractorSelected}
 						/>
 						{!isReadOnly && errors.serviceSchedules?.serviceDuration && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceDuration.message}</p>
 						)}
 
-						<div>
-							<MultiSelectRounded
-								isDisabled={isReadOnly || (!isReadOnly && !formValues.serviceSchedules?.serviceType)}
-								value={formData.expectedItemOrService.map((v) => v.item)}
-								onChange={(selectedItems) => {
-									if (!isReadOnly) {
-										const transformedItems = selectedItems.map((item) => {
-											const existingItem = formData.expectedItemOrService.find((v) => v.item === item);
-											return {
-												item,
-												quantity: existingItem?.quantity ?? 1,
-											};
-										});
-										setValue("serviceSchedules.expectedItemOrService", transformedItems);
-										trigger("serviceSchedules.expectedItemOrService");
-									}
-								}}
-								options={groupContainersBySubWasteType(
-									itemsOptions.filter((item) =>
-										formData.serviceType === SERVICE_TYPES.MEDICAL_WASTE
-											? item.subWasteType !== "Paper Shredding"
-											: item.subWasteType === "Paper Shredding"
-									)
-								)}
-								isRequired
-								label="Expected Container(s)"
-								className="text-inputLabel"
-							/>
+<div className="w-full flex flex-col gap-4">
+  <div className="w-full flex">
+    <p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">
+      Expected Container(s) *
+    </p>
+    <div className="w-2/3">
+      <MultiSelectRounded
+        isDisabled={isReadOnly || (!isReadOnly && !formValues.serviceSchedules?.serviceType) || !hasSubcontractorSelected}
+        value={formData.expectedItemOrService.map((v) => v.item)}
+        onChange={(selectedItems) => {
+          if (!isReadOnly) {
+            const transformedItems = selectedItems.map((item) => {
+              const existingItem = formData.expectedItemOrService.find((v) => v.item === item);
+              return {
+                item,
+                quantity: existingItem?.quantity ?? 1,
+              };
+            });
+            setValue("serviceSchedules.expectedItemOrService", transformedItems);
+            trigger("serviceSchedules.expectedItemOrService");
+          }
+        }}
+        options={groupContainersBySubWasteType(
+          (subContractorContainers.length > 0 ? subContractorContainers : itemsOptions)
+            .filter((item) =>
+              formData.serviceType === SERVICE_TYPES.MEDICAL_WASTE
+                ? item.subWasteType !== "Paper Shredding"
+                : item.subWasteType === "Paper Shredding"
+            )
+        )}
+        isRequired={true}
+        id="expected-items-services-ssr"
+        styles="flex flex-col w-full gap-1 min-h-9"
+        margin="0"
+      />
+    </div>
+  </div>
+  
+  {!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
+    <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
+  )}
 
-							{!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
-								<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
-							)}
+  {formData.expectedItemOrService?.length > 0 && (
+    <div className="mb-4 flex flex-col gap-4">
+      {formData.expectedItemOrService.map((itemObj, itemIndex) => (
+        <div key={itemObj.item} className="flex items-center">
+          <span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
+            {itemsMap?.[itemObj.item]?.length > 40
+              ? itemsMap?.[itemObj.item]
+              : itemsMap?.[itemObj.item]}
+          </span>
+          <div className="relative w-2/3">
+            <input
+              min="1"
+              max="999"
+              value={itemObj.quantity || 1}
+              onChange={(e) => {
+				console.log("keepContainer",KeepContainers);
+				
+                if (isReadOnly&&KeepContainers) return;
+                const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+                const updatedItems = [...formData.expectedItemOrService];
+                updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+                setValue("serviceSchedules.expectedItemOrService", updatedItems);
+                trigger("serviceSchedules.expectedItemOrService");
+              }}
+              disabled={isReadOnly || !hasSubcontractorSelected}
+              className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
+            />
 
-							{formData.expectedItemOrService?.length > 0 && (
-								<div className="mb-6 flex flex-col gap-2">
-									{formData.expectedItemOrService.map((itemObj, itemIndex) => (
-										<div key={itemObj.item} className="flex items-center">
-											<span className="text-base w-1/3 text-inputLabel overflow-ellipsis">
-												{itemsMap?.[itemObj.item] || itemObj.item}
-											</span>
-											<div className="relative w-2/3">
-												<input
-													type="number"
-													min="1"
-													max="999"
-													value={itemObj.quantity || 1}
-													onChange={(e) => {
-														if (isReadOnly) return;
-														const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-														const updatedItems = [...formData.expectedItemOrService];
-														updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-														setValue("serviceSchedules.expectedItemOrService", updatedItems);
-														trigger("serviceSchedules.expectedItemOrService");
-													}}
-													disabled={isReadOnly}
-													className={`p-2 pr-8 w-full pl-3 text-left text-sm ${
-														isReadOnly ? "bg-gray-100" : "bg-inputBg"
-													} rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none`}
-												/>
+            {!isReadOnly && hasSubcontractorSelected && (
+              <>
+                {/* Increase Button (Up Arrow) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newQuantity = Math.min((itemObj.quantity || 1) + 1, 999);
+                    const updatedItems = [...formData.expectedItemOrService];
+                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+                    setValue("serviceSchedules.expectedItemOrService", updatedItems);
+                    trigger("serviceSchedules.expectedItemOrService");
+                  }}
+                  className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
+                >
+                  <HiOutlineChevronUp className="w-4 h-4" />
+                </button>
 
-												{!isReadOnly && (
-													<>
-														{/* Increase Button */}
-														<button
-															type="button"
-															onClick={() => {
-																const newQuantity = Math.min(itemObj.quantity + 1, 999);
-																const updatedItems = [...formData.expectedItemOrService];
-																updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																setValue("serviceSchedules.expectedItemOrService", updatedItems);
-																trigger("serviceSchedules.expectedItemOrService");
-															}}
-															className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
-														>
-															<HiOutlineChevronUp className="w-4 h-4" />
-														</button>
-
-														{/* Decrease Button */}
-														<button
-															type="button"
-															onClick={() => {
-																const newQuantity = Math.max(itemObj.quantity - 1, 1);
-																const updatedItems = [...formData.expectedItemOrService];
-																updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																setValue("serviceSchedules.expectedItemOrService", updatedItems);
-																trigger("serviceSchedules.expectedItemOrService");
-															}}
-															className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
-														>
-															<HiOutlineChevronDown className="w-4 h-4" />
-														</button>
-													</>
-												)}
-											</div>
-										</div>
-									))}
-								</div>
-							)}
-						</div>
+                {/* Decrease Button (Down Arrow) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newQuantity = Math.max((itemObj.quantity || 1) - 1, 1);
+                    const updatedItems = [...formData.expectedItemOrService];
+                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+                    setValue("serviceSchedules.expectedItemOrService", updatedItems);
+                    trigger("serviceSchedules.expectedItemOrService");
+                  }}
+                  className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
+                >
+                  <HiOutlineChevronDown className="w-4 h-4" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 					</div>
 				</div>
 			</div>
