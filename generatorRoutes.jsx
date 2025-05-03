@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "react-toastify";
 import { BiPlus } from "react-icons/bi";
@@ -169,8 +169,12 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
 	const [activeSentSSRs, setActiveSentSSRs] = useState([]);
 	const [transporterName, setTransporterName] = useState("");
-	const [KeepContainers,setKeepContainers] = useState(false)
+	const [KeepContainers, setKeepContainers] = useState(false);
 	const [serviceFrequencyOptions, setServiceFrequencyOptions] = useState([
+		...frequencyPrimaryOptions,
+		...frequencySecondaryOptions,
+	]);
+	const [subcontractorServiveFrequencyOptions, setSubcontractorServiceFrequencyOptions] = useState([
 		...frequencyPrimaryOptions,
 		...frequencySecondaryOptions,
 	]);
@@ -179,7 +183,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		let snapDoc = await getDoc(snapRef);
 		let snapData = { id: snapDoc.id, ...snapDoc.data() };
 		console.log({ snapData });
-		setTransporterName(snapData?.companyDisplayName ?? snapData?.transporterName);
+		setTransporterName(snapData?.companyName);
 	};
 
 	const updateGeneratorData = async () => {
@@ -221,19 +225,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			setIsAutoSaving(false);
 		}
 	};
-	const serviceType = watch("serviceSchedules.serviceType");
-
-	useEffect(() => {
-		if (serviceType) {
-			// Only reset containers if we shouldn't keep them
-			if (!KeepContainers) {
-				setValue("serviceSchedules.expectedItemOrService", []);
-				trigger("serviceSchedules.expectedItemOrService");
-			}
-			// Reset the flag after use
-			setKeepContainers(false);
-		}
-	}, [serviceType, setValue, trigger, KeepContainers]);
 
 	useEffect(() => {
 		const form = instructionsSectionRef.current;
@@ -312,6 +303,26 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		};
 	}, [user]);
 
+	function getServiceFrequencyForSubcontractor(userId) {
+		if (!userId) return () => {};
+		const unsubscribe = onSnapshot(doc(db, COLLECTIONS.serviceSettings, userId), (doc) => {
+			if (doc.exists()) {
+				const data = doc.data();
+				if (data?.serviceFrequencies?.length > 0) {
+					const tempFrequencyOptions = [];
+					data?.serviceFrequencies?.forEach((item) => {
+						const frequency = subcontractorServiveFrequencyOptions.find((option) => option.value === item);
+						if (frequency) {
+							tempFrequencyOptions.push(frequency);
+						}
+					});
+					setSubcontractorServiceFrequencyOptions(tempFrequencyOptions);
+				}
+			}
+		});
+		return unsubscribe;
+	}
+
 	useEffect(() => {
 		if (!user || !user?.uid) return;
 		let unsubscribe = onSnapshot(doc(db, COLLECTIONS.transporters, user?.uid), (snap) => {
@@ -356,81 +367,82 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	// 		if (unsubscribe) unsubscribe();
 	// 	};
 	// }, []);
-const [subContractorContainers, setSubContractorContainers] = useState([]);
+	const [subContractorContainers, setSubContractorContainers] = useState([]);
 
-const fetchContainers = async (transporterId) => {
-  if (!transporterId) {
-    console.log("No transporter ID provided");
-    return [];
-  }
-
-  try {
-    return new Promise((resolve, reject) => {
-      const unsubscribe = onSnapshot(
-        collection(db, "priceBooks", transporterId, "default", "services", "containers"),
-        (snap) => {
-          let tempOptions = [];
-          let tempMap = {};
-          
-          if (snap.docs.length) {
-            snap.docs.forEach((el) => {
-              tempOptions.push({
-                label: el.data()?.masterItemName ?? "--",
-                value: el.id,
-                subWasteType: el.data()?.subWasteType,
-              });
-              tempMap[el.id] = el.data()?.masterItemName ?? "--";
-            });
-            
-            setItemsMap(prevMap => ({...prevMap, ...tempMap}));
-          } else {
-            console.log(`No containers found for transporter: ${transporterId}`);
-          }
-          unsubscribe();
-          resolve(tempOptions);
-        },
-        (error) => {
-          console.error("Error fetching containers:", error);
-          unsubscribe();
-          reject(error);
-        }
-      );
-    });
-  } catch (error) {
-    console.error("Error setting up container listener:", error);
-    return [];
-  }
-};
-
-useEffect(() => {
-	if (user?.uid) {
-	  const loadTransporterContainers = async () => {
-		try {
-		  const containers = await fetchContainers(user.uid);
-		  setItemsOptions(containers);
-		} catch (error) {
-		  console.error("Failed to load initial containers:", error);
+	const fetchContainers = async (transporterId) => {
+		if (!transporterId) {
+			console.log("No transporter ID provided");
+			return [];
 		}
-	  };
-	  
-	  loadTransporterContainers();
-	}
-  }, [user?.uid]);
 
-const handleSubcontractorSelected = async (subcontractorId) => {
-	if (!subcontractorId) {
-	  setSubContractorContainers([]);
-	  return;
-	}
-	
-	try {
-	  const containers = await fetchContainers(subcontractorId);
-	  setSubContractorContainers(containers);
-	} catch (error) {
-	  console.error("Failed to fetch subcontractor containers:", error);
-	  setSubContractorContainers([]);
-	}
-  };
+		try {
+			return new Promise((resolve, reject) => {
+				const unsubscribe = onSnapshot(
+					collection(db, "priceBooks", transporterId, "default", "services", "containers"),
+					(snap) => {
+						let tempOptions = [];
+						let tempMap = {};
+
+						if (snap.docs.length) {
+							snap.docs.forEach((el) => {
+								tempOptions.push({
+									label: el.data()?.masterItemName ?? "--",
+									value: el.id,
+									subWasteType: el.data()?.subWasteType,
+								});
+								tempMap[el.id] = el.data()?.masterItemName ?? "--";
+							});
+
+							setItemsMap((prevMap) => ({ ...prevMap, ...tempMap }));
+						} else {
+							console.log(`No containers found for transporter: ${transporterId}`);
+						}
+						unsubscribe();
+						resolve(tempOptions);
+					},
+					(error) => {
+						console.error("Error fetching containers:", error);
+						unsubscribe();
+						reject(error);
+					}
+				);
+			});
+		} catch (error) {
+			console.error("Error setting up container listener:", error);
+			return [];
+		}
+	};
+
+	useEffect(() => {
+		if (user?.uid) {
+			const loadTransporterContainers = async () => {
+				try {
+					const containers = await fetchContainers(user.uid);
+					setItemsOptions(containers);
+				} catch (error) {
+					console.error("Failed to load initial containers:", error);
+				}
+			};
+
+			loadTransporterContainers();
+		}
+	}, [user?.uid]);
+
+	const handleSubcontractorSelected = async (subcontractorId) => {
+		if (!subcontractorId) {
+			setSubContractorContainers([]);
+			return;
+		}
+
+		try {
+			const containers = await fetchContainers(subcontractorId);
+			setSubContractorContainers(containers);
+			getServiceFrequencyForSubcontractor(subcontractorId);
+		} catch (error) {
+			console.error("Failed to fetch subcontractor containers:", error);
+			setSubContractorContainers([]);
+		}
+	};
 
 	useEffect(() => {
 		if (!generatorData) return;
@@ -1043,10 +1055,6 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 			</div>
 		);
 	};
-	// const isSubcontractorSelected = () => {
-	// 	const selectedSubcontractor = getValues("selectedSubContractor");
-	// 	return selectedSubcontractor !== null && selectedSubcontractor !== undefined;
-	//   };
 
 	const renderSSRForm = (isReadOnly, ssrData) => {
 		console.log("ssr data", ssrData);
@@ -1116,19 +1124,19 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 						<div className="grid grid-cols-2 gap-6">
 							<div className="space-y-4">
 								<div className="flex gap-2">
-									<div className="text-md mb-1">Contractor : </div>
-									<div className="font-medium">{ssrData.transporterName || "N/A"}</div>
+									<div className="font-medium">Contractor: </div>
+									<div className="text-md mb-1">{ssrData.transporterName || "N/A"}</div>
 								</div>
 
 								<div className="flex gap-2">
-									<div className="text-md mb-1">Service Frequency : </div>
-									<div className="font-medium">{getServiceFrequencyLabel(formData.serviceFrequency.type)}</div>
+									<div className="font-medium">Service Frequency: </div>
+									<span className="text-md mb-1">{getServiceFrequencyLabel(formData.serviceFrequency.type)}</span>
 								</div>
 
 								{formData.serviceFrequency.type === "MTWM" && (
 									<div className="flex gap-2">
-										<div className="text-md mb-1">Selected Weekdays :</div>
-										<div className="font-medium">
+										<div className="font-medium">Selected Weekdays:</div>
+										<div className="text-md mb-1">
 											{formData.serviceFrequency.days && formData.serviceFrequency.days.length > 0
 												? formData.serviceFrequency.days
 														.map((day) => {
@@ -1142,41 +1150,41 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 								)}
 
 								<div className="flex gap-2">
-									<div className="text-md mb-1">Requested Start Date :</div>
-									<div className="font-medium">
+									<div className="font-medium">Requested Start Date:</div>
+									<div className="text-md mb-1">
 										{formData.requestedStartDate ? dateFormatter(formData.requestedStartDate) : "Not specified"}
 									</div>
 								</div>
 								<div className="flex gap-2">
-									<div className="text-md mb-1">Service Duration :</div>
-									<div className="font-medium">{getServiceDurationLabel(formData.serviceDuration)}</div>
+									<div className="font-medium">Service Note:</div>
+									<div className="text-md mb-1 whitespace-pre-wrap">{formData.serviceNote || "N/A"}</div>
 								</div>
 							</div>
 
 							<div className="space-y-4">
 								<div className="flex gap-2">
-									<div className="text-md mb-1">Service Type :</div>
-									<div className="font-medium">{getServiceTypeLabel(formData.serviceType)}</div>
+									<div className="font-medium">Service Type :</div>
+									<div className="text-md mb-1">{getServiceTypeLabel(formData.serviceType)}</div>
+								</div>
+								<div className="flex gap-2">
+									<div className="font-medium">Service Duration:</div>
+									<div className="text-md mb-1">{getServiceDurationLabel(formData.serviceDuration)}</div>
 								</div>
 
 								<div className="flex gap-2">
-									<div className="text-md mb-1">Expected Containers :</div>
+									<div className="font-medium">Expected Containers:</div>
 									{formData.expectedItemOrService && formData.expectedItemOrService.length > 0 ? (
 										<div>
 											{formData.expectedItemOrService.map((itemObj, index) => (
 												<div key={index} className="flex justify-between items-center">
-													<span className="text-md">{itemsMap?.[itemObj.item] || itemObj.item}</span>
-													<span className="font-medium">Qty: {itemObj.quantity || 1}</span>
+													<span className="text-md ">({itemObj.quantity || 1})</span>
+													<span className="text-md ml-1">{itemsMap?.[itemObj.item] || itemObj.item}</span>
 												</div>
 											))}
 										</div>
 									) : (
 										<div className="text-gray-500">No containers specified</div>
 									)}
-								</div>
-								<div className="flex gap-2">
-									<div className="text-md mb-1">Service Note :</div>
-									<div className="font-medium whitespace-pre-wrap">{formData.serviceNote || "N/A"}</div>
 								</div>
 							</div>
 						</div>
@@ -1213,13 +1221,13 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 								value={formData.selectedSubContractor ? JSON.stringify(formData.selectedSubContractor) : ""}
 								onChange={(selectedValue) => {
 									if (!isReadOnly) {
-									  const selectedSubcontractor = JSON.parse(selectedValue);
-									  setValue("selectedSubContractor", selectedSubcontractor);
-									  trigger("selectedSubContractor");
-									  setValue("serviceSchedules.expectedItemOrService", []);
-									  handleSubcontractorSelected(selectedSubcontractor.id);
+										const selectedSubcontractor = JSON.parse(selectedValue);
+										setValue("selectedSubContractor", selectedSubcontractor);
+										trigger("selectedSubContractor");
+										setValue("serviceSchedules.expectedItemOrService", []);
+										handleSubcontractorSelected(selectedSubcontractor.id);
 									}
-								  }}
+								}}
 								isRequired
 								listHeight="max-h-64"
 								isDisabled={isReadOnly || formData.isReceivedSSR}
@@ -1231,7 +1239,7 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 
 						<Dropdown
 							label="Service Frequency"
-							options={serviceFrequencyOptions}
+							options={subcontractorServiveFrequencyOptions}
 							value={formData.serviceFrequency.type}
 							onChange={(e) => {
 								if (!isReadOnly) {
@@ -1241,7 +1249,7 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 							}}
 							isRequired
 							listHeight="max-h-64"
-							isDisabled={isReadOnly||!hasSubcontractorSelected}
+							isDisabled={isReadOnly || !hasSubcontractorSelected}
 						/>
 						{!isReadOnly && errors.serviceSchedules?.serviceFrequency?.type && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceFrequency.type.message}</p>
@@ -1275,7 +1283,7 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 												id={`ssr-weekdays-input`}
 												styles="flex flex-col w-full gap-1"
 												margin="0"
-												isDisabled={isReadOnly||!hasSubcontractorSelected}
+												isDisabled={isReadOnly || !hasSubcontractorSelected}
 											/>
 										)}
 									</div>
@@ -1307,7 +1315,7 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 										endYear={new Date().getFullYear() + 5}
 										yearReversed={true}
 										minDate={new Date()}
-										isDisabled={isReadOnly||!hasSubcontractorSelected}
+										isDisabled={isReadOnly || !hasSubcontractorSelected}
 									/>
 								)}
 							</div>
@@ -1328,38 +1336,37 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 					</div>
 
 					<div className="w-1/2 space-y-4">
-					<Dropdown
-  label="Service Type"
-  options={serviceTypes.map((item) => ({
-    label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
-    value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
-    isDisabled: item.value === "HAZARDOUS_WASTE",
-  }))}
-  disabledBgColor="white"
-  disabledTextColor="gray-300"
-  value={formData.serviceType}
-  onChange={(e) => {
-    if (!isReadOnly) {
-      const prevValue = formData.serviceType;
-      console.log("Service type changed from", prevValue, "to", e);
-      
-      // Set KeepContainers flag BEFORE updating service type
-      const shouldKeepContainers = 
-        (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
-        (e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
-        (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
-        (e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING);
-      
-      setKeepContainers(shouldKeepContainers);
-      
-      // Now update the service type value
-      setValue("serviceSchedules.serviceType", e);
-      trigger("serviceSchedules.serviceType");
-    }
-  }}
-  isRequired
-  isDisabled={isReadOnly || !hasSubcontractorSelected}
-/>
+						<Dropdown
+							label="Service Type"
+							options={serviceTypes.map((item) => ({
+								label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
+								value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
+								isDisabled: item.value === "HAZARDOUS_WASTE",
+							}))}
+							disabledBgColor="white"
+							disabledTextColor="gray-300"
+							value={formData.serviceType}
+							onChange={(e) => {
+								if (!isReadOnly) {
+									const prevValue = formData.serviceType;
+									const shouldKeepContainers =
+										(e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+										(e === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
+										(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+										(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
+											prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING);
+									setValue("serviceSchedules.serviceType", e);
+									trigger("serviceSchedules.serviceType");
+									if (!shouldKeepContainers) {
+										setValue("serviceSchedules.expectedItemOrService", []);
+										trigger("serviceSchedules.expectedItemOrService");
+									}
+									setKeepContainers(shouldKeepContainers);
+								}
+							}}
+							isRequired
+							isDisabled={isReadOnly || !hasSubcontractorSelected}
+						/>
 						{!isReadOnly && errors.serviceSchedules?.serviceType && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
 						)}
@@ -1375,121 +1382,119 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 								}
 							}}
 							isRequired
-							isDisabled={isReadOnly||!hasSubcontractorSelected}
+							isDisabled={isReadOnly || !hasSubcontractorSelected}
 						/>
 						{!isReadOnly && errors.serviceSchedules?.serviceDuration && (
 							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceDuration.message}</p>
 						)}
 
-<div className="w-full flex flex-col gap-4">
-  <div className="w-full flex">
-    <p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">
-      Expected Container(s) *
-    </p>
-    <div className="w-2/3">
-      <MultiSelectRounded
-        isDisabled={isReadOnly || (!isReadOnly && !formValues.serviceSchedules?.serviceType) || !hasSubcontractorSelected}
-        value={formData.expectedItemOrService.map((v) => v.item)}
-        onChange={(selectedItems) => {
-          if (!isReadOnly) {
-            const transformedItems = selectedItems.map((item) => {
-              const existingItem = formData.expectedItemOrService.find((v) => v.item === item);
-              return {
-                item,
-                quantity: existingItem?.quantity ?? 1,
-              };
-            });
-            setValue("serviceSchedules.expectedItemOrService", transformedItems);
-            trigger("serviceSchedules.expectedItemOrService");
-          }
-        }}
-        options={groupContainersBySubWasteType(
-          (subContractorContainers.length > 0 ? subContractorContainers : itemsOptions)
-            .filter((item) =>
-              formData.serviceType === SERVICE_TYPES.MEDICAL_WASTE
-                ? item.subWasteType !== "Paper Shredding"
-                : item.subWasteType === "Paper Shredding"
-            )
-        )}
-        isRequired={true}
-        id="expected-items-services-ssr"
-        styles="flex flex-col w-full gap-1 min-h-9"
-        margin="0"
-      />
-    </div>
-  </div>
-  
-  {!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
-    <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
-  )}
+						<div className="w-full flex flex-col gap-4">
+							<div className="w-full flex">
+								<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">Expected Container(s) *</p>
+								<div className="w-2/3">
+									<MultiSelectRounded
+										isDisabled={
+											isReadOnly ||
+											(!isReadOnly && !formValues.serviceSchedules?.serviceType) ||
+											!hasSubcontractorSelected
+										}
+										value={formData.expectedItemOrService.map((v) => v.item)}
+										onChange={(selectedItems) => {
+											if (!isReadOnly) {
+												const transformedItems = selectedItems.map((item) => {
+													const existingItem = formData.expectedItemOrService.find((v) => v.item === item);
+													return {
+														item,
+														quantity: existingItem?.quantity ?? 1,
+													};
+												});
+												setValue("serviceSchedules.expectedItemOrService", transformedItems);
+												trigger("serviceSchedules.expectedItemOrService");
+											}
+										}}
+										options={groupContainersBySubWasteType(
+											(subContractorContainers.length > 0 ? subContractorContainers : itemsOptions).filter((item) =>
+												formData.serviceType === SERVICE_TYPES.MEDICAL_WASTE
+													? item.subWasteType !== "Paper Shredding"
+													: item.subWasteType === "Paper Shredding"
+											)
+										)}
+										isRequired={true}
+										id="expected-items-services-ssr"
+										styles="flex flex-col w-full gap-1 min-h-9"
+										margin="0"
+									/>
+								</div>
+							</div>
 
-  {formData.expectedItemOrService?.length > 0 && (
-    <div className="mb-4 flex flex-col gap-4">
-      {formData.expectedItemOrService.map((itemObj, itemIndex) => (
-        <div key={itemObj.item} className="flex items-center">
-          <span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
-            {itemsMap?.[itemObj.item]?.length > 40
-              ? itemsMap?.[itemObj.item]
-              : itemsMap?.[itemObj.item]}
-          </span>
-          <div className="relative w-2/3">
-          <input
-  min="1"
-  max="999"
-  value={itemObj.quantity || 1}
-  onChange={(e) => {
-    // Only block changes when in read-only mode AND NOT keeping containers
-    if (isReadOnly && !KeepContainers) return;
-    
-    const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-    const updatedItems = [...formData.expectedItemOrService];
-    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-    setValue("serviceSchedules.expectedItemOrService", updatedItems);
-    trigger("serviceSchedules.expectedItemOrService");
-  }}
-  disabled={isReadOnly || !hasSubcontractorSelected}
-  className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
-/>
+							{!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
+								<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
+							)}
 
-            {!isReadOnly && hasSubcontractorSelected && (
-              <>
-                {/* Increase Button (Up Arrow) */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newQuantity = Math.min((itemObj.quantity || 1) + 1, 999);
-                    const updatedItems = [...formData.expectedItemOrService];
-                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-                    setValue("serviceSchedules.expectedItemOrService", updatedItems);
-                    trigger("serviceSchedules.expectedItemOrService");
-                  }}
-                  className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
-                >
-                  <HiOutlineChevronUp className="w-4 h-4" />
-                </button>
+							{formData.expectedItemOrService?.length > 0 && (
+								<div className="mb-4 flex flex-col gap-4">
+									{formData.expectedItemOrService.map((itemObj, itemIndex) => (
+										<div key={itemObj.item} className="flex items-center">
+											<span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
+												{itemsMap?.[itemObj.item]?.length > 40 ? itemsMap?.[itemObj.item] : itemsMap?.[itemObj.item]}
+											</span>
+											<div className="relative w-2/3">
+												<input
+													min="1"
+													max="999"
+													value={itemObj.quantity || 1}
+													onChange={(e) => {
+														if (isReadOnly && !KeepContainers) return;
 
-                {/* Decrease Button (Down Arrow) */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newQuantity = Math.max((itemObj.quantity || 1) - 1, 1);
-                    const updatedItems = [...formData.expectedItemOrService];
-                    updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-                    setValue("serviceSchedules.expectedItemOrService", updatedItems);
-                    trigger("serviceSchedules.expectedItemOrService");
-                  }}
-                  className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
-                >
-                  <HiOutlineChevronDown className="w-4 h-4" />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  )}
-</div>
+														const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+														const updatedItems = [...formData.expectedItemOrService];
+														updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+														setValue("serviceSchedules.expectedItemOrService", updatedItems);
+														trigger("serviceSchedules.expectedItemOrService");
+													}}
+													disabled={isReadOnly || !hasSubcontractorSelected}
+													className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
+												/>
+
+												{!isReadOnly && hasSubcontractorSelected && (
+													<>
+														{/* Increase Button (Up Arrow) */}
+														<button
+															type="button"
+															onClick={() => {
+																const newQuantity = Math.min((itemObj.quantity || 1) + 1, 999);
+																const updatedItems = [...formData.expectedItemOrService];
+																updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																setValue("serviceSchedules.expectedItemOrService", updatedItems);
+																trigger("serviceSchedules.expectedItemOrService");
+															}}
+															className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
+														>
+															<HiOutlineChevronUp className="w-4 h-4" />
+														</button>
+
+														{/* Decrease Button (Down Arrow) */}
+														<button
+															type="button"
+															onClick={() => {
+																const newQuantity = Math.max((itemObj.quantity || 1) - 1, 1);
+																const updatedItems = [...formData.expectedItemOrService];
+																updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																setValue("serviceSchedules.expectedItemOrService", updatedItems);
+																trigger("serviceSchedules.expectedItemOrService");
+															}}
+															className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
+														>
+															<HiOutlineChevronDown className="w-4 h-4" />
+														</button>
+													</>
+												)}
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+						</div>
 					</div>
 				</div>
 			</div>
@@ -1814,6 +1819,14 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 		try {
 			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
 			const transporterDoc = await getDoc(currentTransporterRef);
+			const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
+			const subcontractorDoc = await getDoc(subcontractorRef);
+
+			const cancellationData = {
+				status: SERVICE_STATUS.CANCELLED,
+				cancellationNote: cancelReason,
+				cancelledAt: new Date().toISOString(),
+			};
 
 			if (transporterDoc.exists()) {
 				const transporterData = transporterDoc.data();
@@ -1823,32 +1836,48 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 					const requestIndex = sharedGenerators.fromMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
 
 					if (requestIndex !== -1) {
-						sharedGenerators.fromMe[requestIndex].status = SERVICE_STATUS.ACCEPTED;
-						sharedGenerators.fromMe[requestIndex].cancellationNote = cancelReason;
-						sharedGenerators.fromMe[requestIndex].cancelledAt = new Date().toISOString();
+						sharedGenerators.fromMe[requestIndex] = {
+							...sharedGenerators.fromMe[requestIndex],
+							...cancellationData,
+						};
 
 						await updateDoc(currentTransporterRef, { sharedGenerators });
-						const updatedRequests = sentSubcontractorRequests.map((req) =>
-							req.ssrId === ssrToCancel.ssrId
-								? {
-										...req,
-										status: SERVICE_STATUS.CANCELLED,
-										cancellationNote: cancelReason,
-										cancelledAt: new Date().toISOString(),
-								  }
-								: req
-						);
-
-						setSentSubcontractorRequests(updatedRequests);
-						setActiveSentSSRs((prevActive) => prevActive.filter((ssr) => ssr.ssrId !== ssrToCancel.ssrId));
-
-						showSuccessToastMessage("Subcontractor request cancelled successfully");
-					} else {
-						showErrorToastMessage("Could not find the request to cancel");
 					}
 				}
 			}
 
+			if (subcontractorDoc.exists()) {
+				const subcontractorData = subcontractorDoc.data();
+				let subSharedGenerators = subcontractorData.sharedGenerators || {};
+
+				if (subSharedGenerators.toMe && subSharedGenerators.toMe.length) {
+					const subRequestIndex = subSharedGenerators.toMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
+
+					if (subRequestIndex !== -1) {
+						subSharedGenerators.toMe[subRequestIndex] = {
+							...subSharedGenerators.toMe[subRequestIndex],
+							...cancellationData,
+						};
+
+						await updateDoc(subcontractorRef, { sharedGenerators: subSharedGenerators });
+					}
+				}
+			}
+
+			const updatedRequests = sentSubcontractorRequests.map((req) =>
+				req.ssrId === ssrToCancel.ssrId
+					? {
+							...req,
+							...cancellationData,
+					  }
+					: req
+			);
+
+			setSentSubcontractorRequests(updatedRequests);
+			setActiveSentSSRs((prevActive) => prevActive.filter((ssr) => ssr.ssrId !== ssrToCancel.ssrId));
+
+			showSuccessToastMessage("Subcontractor request cancelled successfully");
+			resetFormForNewSSR();
 			document.getElementById(`delete-SSR`).close();
 			setCancelReason("");
 		} catch (error) {
@@ -1865,6 +1894,15 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 		setValue("serviceNote", "");
 		setValue("requestedStartDate", null);
 	};
+	const isReadOnly = useMemo(() => user?.uid !== generatorData?.transporterId, [user, generatorData]);
+	const filteredRouteOptions = useMemo(() => {
+		const options = [...routeOptions];
+		const outOfServiceIndex = options.findIndex((option) => option.label === "Out of Service Network");
+		if (outOfServiceIndex !== -1) {
+			return options.slice(0, outOfServiceIndex);
+		}
+		return options;
+	}, [routeOptions]);
 
 	if (!generatorData) return <Loader />;
 
@@ -1972,7 +2010,12 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 					</form>
 				</div>
 			</dialog>
-			<GeneratorInfoHeader generatorData={generatorData ?? {}} user={user} transporterName={transporterName} />
+			<GeneratorInfoHeader
+				generatorData={generatorData ?? {}}
+				user={user}
+				transporterName={transporterName}
+				isReadOnly={isReadOnly}
+			/>
 			<div className="rounded-xl overflow-clip">
 				<AzureMapsProvider>
 					<RouteAssignment
@@ -2024,442 +2067,438 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 			)}
 			<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Scope Of Work (SOW)</h6>
 			<form className="flex flex-col gap-2">
-				{(!generatorData.isSubContracted || generatorData?.transporterId != user?.uid) &&
-					fields.map((field, index) => (
-						<div key={field.id || Date.now() + Math.random()} className="border-b border-gray-100">
-							<div className="flex gap-8 w-full ">
-								<div className="w-1/2">
-									<Controller
-										name={`serviceSchedules.${index}.routeId`}
-										control={control}
-										rules={{ required: "Route is required" }}
-										render={({ field: { onChange, value } }) => (
-											<Dropdown
-												label="Route"
-												options={routeOptions}
-												value={value}
-												onChange={(e) => {
-													onChange(e);
-													trigger(`serviceSchedules.${index}.routeId`, { shouldFocus: true });
-												}}
-												isRequired={true}
-											/>
-										)}
-									/>
-									{errors.serviceSchedules?.[index]?.routeId && (
-										<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].routeId.message}</p>
-									)}
-									<Controller
-										name={`serviceSchedules.${index}.serviceFrequency.type`}
-										control={control}
-										rules={{ required: "Service Frequency is required" }}
-										render={({ field: { onChange, value } }) => (
-											<Dropdown
-												label="Service Frequency"
-												options={serviceFrequencyOptions}
-												value={value}
-												onChange={(e) => {
-													onChange(e);
-													trigger(`serviceSchedules.${index}.serviceFrequency.type`, { shouldFocus: true });
-												}}
-												isRequired={true}
-												noCursor={field?.isWillCall}
-												listHeight={"max-h-64"}
-											/>
-										)}
-									/>
-									{errors.serviceSchedules?.[index]?.serviceFrequency?.type && (
-										<p className="text-red-500 text-sm mt-1">
-											{errors.serviceSchedules[index].serviceFrequency.type.message}
-										</p>
-									)}
-									{watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM" && (
-										<Controller
-											name={`serviceSchedules.${index}.serviceFrequency.days`}
-											control={control}
-											rules={{ required: "Weekdays are required for multiple times weekly" }}
-											render={({ field: { onChange, value } }) => (
-												<div className="w-full flex">
-													<p className="w-1/3 whitespace-nowrap truncate">Select Weekdays *</p>
-													<div className="w-2/3">
-														<MultiSelectRounded
-															value={value}
-															onChange={(e) => {
-																onChange(e);
-																if (watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM") {
-																	trigger(`serviceSchedules.${index}.serviceFrequency.days`, { shouldFocus: true });
-																}
-															}}
-															options={weekdayOptions}
-															id={`weekdays-input-${index}`}
-															styles="flex flex-col w-full gap-1"
-															margin="0"
-														/>
-													</div>
-												</div>
-											)}
+				{fields.map((field, index) => (
+					<div key={field.id || Date.now() + Math.random()} className="border-b border-gray-100">
+						<div className="flex gap-8 w-full ">
+							<div className="w-1/2">
+								<Controller
+									name={`serviceSchedules.${index}.routeId`}
+									control={control}
+									rules={{ required: "Route is required" }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Route"
+											options={isReadOnly ? filteredRouteOptions : routeOptions}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.routeId`, { shouldFocus: true });
+											}}
+											isRequired={true}
 										/>
 									)}
-									<div className="flex items-center justify-between my-4">
-										<label htmlFor={`anchorDate-${index}`} className="truncate text-inputLabel font-normal">
-											{field?.isWillCall ? "Will Call Date " : "Anchor Date "}*
-										</label>
-										<div className="w-2/3">
-											<Controller
-												name={`serviceSchedules.${index}.anchorDate`}
-												control={control}
-												rules={{
-													required: "Anchor date is required.",
-												}}
-												render={({ field: { value, onChange } }) => (
-													<CustomDatePicker
-														selectedDate={value}
-														setSelectedDate={(value) => {
-															console.log({ value });
-															onChange(value);
-															trigger(`serviceSchedules.${index}.anchorDate`, { shouldFocus: true });
+								/>
+								{errors.serviceSchedules?.[index]?.routeId && (
+									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].routeId.message}</p>
+								)}
+								<Controller
+									name={`serviceSchedules.${index}.serviceFrequency.type`}
+									control={control}
+									rules={{ required: "Service Frequency is required" }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Service Frequency"
+											options={serviceFrequencyOptions}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.serviceFrequency.type`, { shouldFocus: true });
+											}}
+											isRequired={true}
+											noCursor={field?.isWillCall}
+											listHeight={"max-h-64"}
+										/>
+									)}
+								/>
+								{errors.serviceSchedules?.[index]?.serviceFrequency?.type && (
+									<p className="text-red-500 text-sm mt-1">
+										{errors.serviceSchedules[index].serviceFrequency.type.message}
+									</p>
+								)}
+								{watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM" && (
+									<Controller
+										name={`serviceSchedules.${index}.serviceFrequency.days`}
+										control={control}
+										rules={{ required: "Weekdays are required for multiple times weekly" }}
+										render={({ field: { onChange, value } }) => (
+											<div className="w-full flex">
+												<p className="w-1/3 whitespace-nowrap truncate">Select Weekdays *</p>
+												<div className="w-2/3">
+													<MultiSelectRounded
+														value={value}
+														onChange={(e) => {
+															onChange(e);
+															if (watchServiceSchedules[index]?.serviceFrequency?.type === "MTWM") {
+																trigger(`serviceSchedules.${index}.serviceFrequency.days`, { shouldFocus: true });
+															}
 														}}
-														label={"Anchor Date *"}
-														startYear={new Date().getFullYear()}
-														endYear={new Date().getFullYear() + 5}
-														yearReversed={true}
-														minDate={new Date()}
+														options={weekdayOptions}
+														id={`weekdays-input-${index}`}
+														styles="flex flex-col w-full gap-1"
+														margin="0"
 													/>
-												)}
-											/>
-										</div>
-									</div>
-									{errors.serviceSchedules?.[index]?.anchorDate && (
-										<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].anchorDate.message}</p>
-									)}
-								</div>
-								<div className="w-1/2 ">
-									<Controller
-										name={`serviceSchedules.${index}.serviceType`}
-										control={control}
-										rules={{ required: "Service Type is required." }}
-										render={({ field: { onChange, value } }) => (
-											<Dropdown
-												label="Service Type"
-												id={`service-input-${index}`}
-												options={serviceTypes.map((item) => {
-													if (item.value === "HAZARDOUS_WASTE") {
-														return {
-															label: "Hazardous Waste",
-															value: null,
-															isDisabled: true,
-														};
-													}
-													return {
-														label: item.label,
-														value: item.value,
-													};
-												})}
-												value={value}
-												onChange={(e) => {
-													onChange(e);
-													trigger(`serviceSchedules.${index}.serviceType`, { shouldFocus: true });
-													if (
-														!(
-															(e === SERVICE_TYPES.PAPER_SHREDDING && value === SERVICE_TYPES.PAPER_SHREDDING) ||
-															(e === SERVICE_TYPES.PAPER_SHREDDING &&
-																value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
-															(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
-																value === SERVICE_TYPES.PAPER_SHREDDING) ||
-															(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
-																value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING)
-														)
-													) {
-														setValue(`serviceSchedules.${index}.expectedItemOrService`, []);
-													}
-												}}
-												isRequired={true}
-												disabledBgColor="white"
-												disabledTextColor="gray-300"
-											/>
-										)}
-									/>
-									{errors.serviceSchedules?.[index]?.serviceType && (
-										<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
-									)}
-									<Controller
-										name={`serviceSchedules.${index}.serviceDuration`}
-										control={control}
-										rules={{ required: "Service Duration is required." }}
-										render={({ field: { onChange, value } }) => (
-											<Dropdown
-												label="Service Duration"
-												options={serviceDurationOptions}
-												value={value}
-												onChange={(e) => {
-													onChange(e);
-													trigger(`serviceSchedules.${index}.serviceDuration`, { shouldFocus: true });
-												}}
-												isRequired={true}
-											/>
-										)}
-									/>
-									{errors.serviceSchedules?.[index]?.serviceType && (
-										<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
-									)}
-									<Controller
-										name={`serviceSchedules.${index}.expectedItemOrService`}
-										control={control}
-										rules={{
-											required: "Expected Container is required.",
-											validate: (value) => {
-												return (
-													value.every((item) => item.quantity >= 1 && item.quantity <= 999) ||
-													"Quantity must be between 1 and 999"
-												);
-											},
-										}}
-										render={({ field: { value, onChange } }) => (
-											<div className="w-full flex flex-col gap-4">
-												<div className="w-full flex">
-													<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">
-														Expected Container(s) *
-													</p>
-													<div className="w-2/3">
-														<MultiSelectRounded
-															isDisabled={!formValues.serviceSchedules[index].serviceType}
-															value={value.map((v) => v.item)}
-															onChange={(selectedItems) => {
-																const transformedItems = selectedItems.map((item) => {
-																	const existingItem = value.find((v) => v.item === item);
-																	return {
-																		item,
-																		quantity: existingItem ? existingItem.quantity : 1,
-																	};
-																});
-																onChange(transformedItems);
-																trigger(`serviceSchedules.${index}.expectedItemOrService`, { shouldFocus: true });
-															}}
-															options={groupContainersBySubWasteType(
-																itemsOptions.filter((item) =>
-																	formValues.serviceSchedules[index].serviceType === SERVICE_TYPES.MEDICAL_WASTE
-																		? item.subWasteType !== "Paper Shredding"
-																		: item.subWasteType === "Paper Shredding"
-																)
-															)}
-															isRequired={true}
-															id={`expected-items-services-${index}`}
-															styles="flex flex-col w-full gap-1 min-h-9"
-															margin="0"
-														/>
-													</div>
 												</div>
-												{value?.length > 0 && value && value?.[0]?.item?.length > 0 && (
-													<div className="mb-4 flex flex-col gap-4">
-														{value.map((itemObj, itemIndex) => (
-															<div key={itemObj.item} className="flex items-center ">
-																<span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
-																	{itemsMap?.[itemObj.item]?.length > 40
-																		? itemsMap?.[itemObj.item]
-																		: itemsMap?.[itemObj.item]}
-																</span>
-																<div className="relative w-2/3">
-																	<input
-																		//type="number"
-																		min="1"
-																		max="999"
-																		value={itemObj.quantity}
-																		onChange={(e) => {
-																			const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-																			const updatedItems = [...value];
-																			updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																			onChange(updatedItems);
-																		}}
-																		className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
-																	/>
-
-																	{/* Increase Button (Up Arrow) */}
-																	<button
-																		type="button"
-																		onClick={() => {
-																			const newQuantity = Math.min(itemObj.quantity + 1, 999);
-																			const updatedItems = [...value];
-																			updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																			onChange(updatedItems);
-																		}}
-																		className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
-																	>
-																		<HiOutlineChevronUp className="w-4 h-4" />
-																	</button>
-
-																	{/* Decrease Button (Down Arrow) */}
-																	<button
-																		type="button"
-																		onClick={() => {
-																			const newQuantity = Math.max(itemObj.quantity - 1, 1);
-																			const updatedItems = [...value];
-																			updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-																			onChange(updatedItems);
-																		}}
-																		className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
-																	>
-																		<HiOutlineChevronDown className="w-4 h-4" />
-																	</button>
-																</div>
-															</div>
-														))}
-													</div>
-												)}
 											</div>
 										)}
 									/>
-									{errors.serviceSchedules?.[index]?.expectedItemOrService && (
-										<p className="text-red-500 text-sm mt-1">
-											{errors.serviceSchedules[index].expectedItemOrService?.message}
-										</p>
-									)}
-								</div>
-							</div>
-
-							{watchServiceSchedules[index]?.serviceFrequency?.type === "WC" &&
-							watchServiceSchedules[index]?.anchorDate?.length > 0 ? (
-								<div className="mb-4 w-full">
-									<h6 className="font-medium pb-2">Next Service</h6>
-									<div className="flex gap-2 flex-wrap">
-										<div className="items-center bg-gray-100 rounded-full px-8 py-1 text-sm text-gray-700 mr-2 mb-2">
-											<p>{dateFormatter(watchServiceSchedules[index].anchorDate)}</p>
-											{renderUpcomingOperatingHours(watchServiceSchedules[index].anchorDate)}
-										</div>
-									</div>
-								</div>
-							) : (
-								watchServiceSchedules[index]?.upcomingDates?.length > 0 && (
-									<div className="mb-4 w-full">
-										<h6 className="font-medium pb-2">Next 6 Services If Saved</h6>
-										<div className="flex gap-2 flex-wrap">
-											{watchServiceSchedules[index].upcomingDates.map((date, dateIndex) => {
-												return (
-													<div
-														key={dateIndex}
-														className="items-center bg-gray-100 rounded-full px-5 py-1 text-sm text-gray-700 mr-2 mb-2"
-													>
-														<p>
-															{watchServiceSchedules[index].serviceFrequency.type === "MTWM"
-																? formatUtcDateString(date)
-																: dateFormatter(date)}
-														</p>
-														{renderUpcomingOperatingHours(
-															watchServiceSchedules[index].serviceFrequency.type === "MTWM"
-																? formatUtcDateString(date)
-																: dateFormatter(date)
-														)}
-													</div>
-												);
-											})}
-										</div>
-									</div>
-								)
-							)}
-
-							{
-								<div className="w-full flex justify-end p-2 gap-5">
-									{fields.length > 0 && (
-										<button
-											type="button"
-											className="rounded-full px-4 py-1 min-w-40 text-sm border border-black hover:bg-cardTextGray hover:bg-opacity-10 "
-											onClick={async () => {
-												if (watchServiceSchedules[index]?.id) {
-													document.getElementById(`delete-schedule-services-${index}`).showModal();
-												} else {
-													remove(index);
-												}
+								)}
+								<div className="flex items-center justify-between my-4">
+									<label htmlFor={`anchorDate-${index}`} className="truncate text-inputLabel font-normal">
+										{field?.isWillCall ? "Will Call Date " : "Anchor Date "}*
+									</label>
+									<div className="w-2/3">
+										<Controller
+											name={`serviceSchedules.${index}.anchorDate`}
+											control={control}
+											rules={{
+												required: "Anchor date is required.",
 											}}
-										>
-											{currentServiceSchedules.find((el) => el.id === watchServiceSchedules[index]?.id)
-												?.isProcessing ? (
-												<Loader height="h-8 pt-1.5" />
-											) : (
-												"Remove service schedule"
+											render={({ field: { value, onChange } }) => (
+												<CustomDatePicker
+													selectedDate={value}
+													setSelectedDate={(value) => {
+														console.log({ value });
+														onChange(value);
+														trigger(`serviceSchedules.${index}.anchorDate`, { shouldFocus: true });
+													}}
+													label={"Anchor Date *"}
+													startYear={new Date().getFullYear()}
+													endYear={new Date().getFullYear() + 5}
+													yearReversed={true}
+													minDate={new Date()}
+												/>
 											)}
-										</button>
-									)}
-									<button
-										type="button"
-										disabled={
-											!isUpdating(prevServiceSchedules[index], formValues.serviceSchedules[index]) || disableButton
-										}
-										className={`p-2 flex items-center justify-center px-4 min-w-40 bg-primary-500 hover:bg-primary-500/90 disabled:bg-cardTextGray text-white rounded-full text-center `}
-										onClick={async () => {
-											const res = await trigger(`serviceSchedules.${index}`, { shouldFocus: true });
-											if (!res) return;
-											setDisableButton(true);
-											handleSave(index);
-										}}
-									>
-										{currentServiceSchedules.find((el) => el.id === formValues?.serviceSchedules[index]?.id)
-											?.isProcessing ? (
-											<Loader height="h-8 pt-1.5" />
-										) : formValues?.serviceSchedules[index]?.id ? (
-											"Update"
-										) : (
-											"Save"
-										)}
-									</button>
-								</div>
-							}
-							<dialog id={`delete-schedule-services-${index}`} className="modal">
-								<div className="modal-box">
-									<div>
-										{/* if there is a button in form, it will close the modal */}
-										<button
-											className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-											type="button"
-											onClick={() => {
-												document.getElementById(`delete-schedule-services-${index}`).close();
-											}}
-										>
-											✕
-										</button>
-									</div>
-									<h3 className="font-bold text-lg">Are you sure?</h3>
-									<div className="flex py-5 gap-5 flex-col">
-										<p className="">Proceeding with this operation will affect pending services.</p>
-										<p className="text-sm">
-											On confirmation the pending services will be deleted and this schedule will be removed. However
-											this operation will not delete any complete, inprogress or cancelled services. This operation
-											cannot be undone.
-										</p>
-										<p>Enter Note for Cancellation *</p>
-										<textarea
-											rows={3}
-											onChange={(e) => setCancelReason(e.target.value)}
-											className={` w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none  focus:ring-1 focus:ring-dashInActiveBtnText`}
 										/>
 									</div>
-									<div className="flex w-full justify-between">
-										<button
-											className="btn btn-error btn-sm"
-											type="button"
-											onClick={() => {
-												if (!cancelReason) {
-													showErrorToastMessage("Cancellation note is required.");
-													return;
+								</div>
+								{errors.serviceSchedules?.[index]?.anchorDate && (
+									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].anchorDate.message}</p>
+								)}
+							</div>
+							<div className="w-1/2 ">
+								<Controller
+									name={`serviceSchedules.${index}.serviceType`}
+									control={control}
+									rules={{ required: "Service Type is required." }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Service Type"
+											id={`service-input-${index}`}
+											options={serviceTypes.map((item) => {
+												if (item.value === "HAZARDOUS_WASTE") {
+													return {
+														label: "Hazardous Waste",
+														value: null,
+														isDisabled: true,
+													};
 												}
-												deleteSchedule(field, index);
-												document.getElementById(`delete-schedule-services-${index}`).close();
+												return {
+													label: item.label,
+													value: item.value,
+												};
+											})}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.serviceType`, { shouldFocus: true });
+												if (
+													!(
+														(e === SERVICE_TYPES.PAPER_SHREDDING && value === SERVICE_TYPES.PAPER_SHREDDING) ||
+														(e === SERVICE_TYPES.PAPER_SHREDDING && value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
+														(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && value === SERVICE_TYPES.PAPER_SHREDDING) ||
+														(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
+															value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING)
+													)
+												) {
+													setValue(`serviceSchedules.${index}.expectedItemOrService`, []);
+												}
 											}}
-										>
-											Remove Schedule
-										</button>
-										<button
-											type="button"
-											className="btn btn-primary btn-sm"
-											onClick={() => {
-												document.getElementById(`delete-schedule-services-${index}`).close();
+											isRequired={true}
+											disabledBgColor="white"
+											disabledTextColor="gray-300"
+										/>
+									)}
+								/>
+								{errors.serviceSchedules?.[index]?.serviceType && (
+									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
+								)}
+								<Controller
+									name={`serviceSchedules.${index}.serviceDuration`}
+									control={control}
+									rules={{ required: "Service Duration is required." }}
+									render={({ field: { onChange, value } }) => (
+										<Dropdown
+											label="Service Duration"
+											options={serviceDurationOptions}
+											value={value}
+											onChange={(e) => {
+												onChange(e);
+												trigger(`serviceSchedules.${index}.serviceDuration`, { shouldFocus: true });
 											}}
-										>
-											Keep Schedule
-										</button>
+											isRequired={true}
+										/>
+									)}
+								/>
+								{errors.serviceSchedules?.[index]?.serviceType && (
+									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
+								)}
+								<Controller
+									name={`serviceSchedules.${index}.expectedItemOrService`}
+									control={control}
+									rules={{
+										required: "Expected Container is required.",
+										validate: (value) => {
+											return (
+												value.every((item) => item.quantity >= 1 && item.quantity <= 999) ||
+												"Quantity must be between 1 and 999"
+											);
+										},
+									}}
+									render={({ field: { value, onChange } }) => (
+										<div className="w-full flex flex-col gap-4">
+											<div className="w-full flex">
+												<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">
+													Expected Container(s) *
+												</p>
+												<div className="w-2/3">
+													<MultiSelectRounded
+														isDisabled={!formValues.serviceSchedules[index].serviceType}
+														value={value.map((v) => v.item)}
+														onChange={(selectedItems) => {
+															const transformedItems = selectedItems.map((item) => {
+																const existingItem = value.find((v) => v.item === item);
+																return {
+																	item,
+																	quantity: existingItem ? existingItem.quantity : 1,
+																};
+															});
+															onChange(transformedItems);
+															trigger(`serviceSchedules.${index}.expectedItemOrService`, { shouldFocus: true });
+														}}
+														options={groupContainersBySubWasteType(
+															itemsOptions.filter((item) =>
+																formValues.serviceSchedules[index].serviceType === SERVICE_TYPES.MEDICAL_WASTE
+																	? item.subWasteType !== "Paper Shredding"
+																	: item.subWasteType === "Paper Shredding"
+															)
+														)}
+														isRequired={true}
+														id={`expected-items-services-${index}`}
+														styles="flex flex-col w-full gap-1 min-h-9"
+														margin="0"
+													/>
+												</div>
+											</div>
+											{value?.length > 0 && value && value?.[0]?.item?.length > 0 && (
+												<div className="mb-4 flex flex-col gap-4">
+													{value.map((itemObj, itemIndex) => (
+														<div key={itemObj.item} className="flex items-center ">
+															<span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
+																{itemsMap?.[itemObj.item]?.length > 40
+																	? itemsMap?.[itemObj.item]
+																	: itemsMap?.[itemObj.item]}
+															</span>
+															<div className="relative w-2/3">
+																<input
+																	//type="number"
+																	min="1"
+																	max="999"
+																	value={itemObj.quantity}
+																	onChange={(e) => {
+																		const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+																		const updatedItems = [...value];
+																		updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																		onChange(updatedItems);
+																	}}
+																	className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
+																/>
+
+																{/* Increase Button (Up Arrow) */}
+																<button
+																	type="button"
+																	onClick={() => {
+																		const newQuantity = Math.min(itemObj.quantity + 1, 999);
+																		const updatedItems = [...value];
+																		updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																		onChange(updatedItems);
+																	}}
+																	className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
+																>
+																	<HiOutlineChevronUp className="w-4 h-4" />
+																</button>
+
+																{/* Decrease Button (Down Arrow) */}
+																<button
+																	type="button"
+																	onClick={() => {
+																		const newQuantity = Math.max(itemObj.quantity - 1, 1);
+																		const updatedItems = [...value];
+																		updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+																		onChange(updatedItems);
+																	}}
+																	className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
+																>
+																	<HiOutlineChevronDown className="w-4 h-4" />
+																</button>
+															</div>
+														</div>
+													))}
+												</div>
+											)}
+										</div>
+									)}
+								/>
+								{errors.serviceSchedules?.[index]?.expectedItemOrService && (
+									<p className="text-red-500 text-sm mt-1">
+										{errors.serviceSchedules[index].expectedItemOrService?.message}
+									</p>
+								)}
+							</div>
+						</div>
+
+						{watchServiceSchedules[index]?.serviceFrequency?.type === "WC" &&
+						watchServiceSchedules[index]?.anchorDate?.length > 0 ? (
+							<div className="mb-4 w-full">
+								<h6 className="font-medium pb-2">Next Service</h6>
+								<div className="flex gap-2 flex-wrap">
+									<div className="items-center bg-gray-100 rounded-full px-8 py-1 text-sm text-gray-700 mr-2 mb-2">
+										<p>{dateFormatter(watchServiceSchedules[index].anchorDate)}</p>
+										{renderUpcomingOperatingHours(watchServiceSchedules[index].anchorDate)}
 									</div>
 								</div>
-							</dialog>
-						</div>
-					))}
+							</div>
+						) : (
+							watchServiceSchedules[index]?.upcomingDates?.length > 0 && (
+								<div className="mb-4 w-full">
+									<h6 className="font-medium pb-2">Next 6 Services If Saved</h6>
+									<div className="flex gap-2 flex-wrap">
+										{watchServiceSchedules[index].upcomingDates.map((date, dateIndex) => {
+											return (
+												<div
+													key={dateIndex}
+													className="items-center bg-gray-100 rounded-full px-5 py-1 text-sm text-gray-700 mr-2 mb-2"
+												>
+													<p>
+														{watchServiceSchedules[index].serviceFrequency.type === "MTWM"
+															? formatUtcDateString(date)
+															: dateFormatter(date)}
+													</p>
+													{renderUpcomingOperatingHours(
+														watchServiceSchedules[index].serviceFrequency.type === "MTWM"
+															? formatUtcDateString(date)
+															: dateFormatter(date)
+													)}
+												</div>
+											);
+										})}
+									</div>
+								</div>
+							)
+						)}
+
+						{
+							<div className="w-full flex justify-end p-2 gap-5">
+								{fields.length > 0 && (
+									<button
+										type="button"
+										className="rounded-full px-4 py-1 min-w-40 text-sm border border-black hover:bg-cardTextGray hover:bg-opacity-10 "
+										onClick={async () => {
+											if (watchServiceSchedules[index]?.id) {
+												document.getElementById(`delete-schedule-services-${index}`).showModal();
+											} else {
+												remove(index);
+											}
+										}}
+									>
+										{currentServiceSchedules.find((el) => el.id === watchServiceSchedules[index]?.id)?.isProcessing ? (
+											<Loader height="h-8 pt-1.5" />
+										) : (
+											"Remove service schedule"
+										)}
+									</button>
+								)}
+								<button
+									type="button"
+									disabled={
+										!isUpdating(prevServiceSchedules[index], formValues.serviceSchedules[index]) || disableButton
+									}
+									className={`p-2 flex items-center justify-center px-4 min-w-40 bg-primary-500 hover:bg-primary-500/90 disabled:bg-cardTextGray text-white rounded-full text-center `}
+									onClick={async () => {
+										const res = await trigger(`serviceSchedules.${index}`, { shouldFocus: true });
+										if (!res) return;
+										setDisableButton(true);
+										handleSave(index);
+									}}
+								>
+									{currentServiceSchedules.find((el) => el.id === formValues?.serviceSchedules[index]?.id)
+										?.isProcessing ? (
+										<Loader height="h-8 pt-1.5" />
+									) : formValues?.serviceSchedules[index]?.id ? (
+										"Update"
+									) : (
+										"Save"
+									)}
+								</button>
+							</div>
+						}
+						<dialog id={`delete-schedule-services-${index}`} className="modal">
+							<div className="modal-box">
+								<div>
+									{/* if there is a button in form, it will close the modal */}
+									<button
+										className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+										type="button"
+										onClick={() => {
+											document.getElementById(`delete-schedule-services-${index}`).close();
+										}}
+									>
+										✕
+									</button>
+								</div>
+								<h3 className="font-bold text-lg">Are you sure?</h3>
+								<div className="flex py-5 gap-5 flex-col">
+									<p className="">Proceeding with this operation will affect pending services.</p>
+									<p className="text-sm">
+										On confirmation the pending services will be deleted and this schedule will be removed. However this
+										operation will not delete any complete, inprogress or cancelled services. This operation cannot be
+										undone.
+									</p>
+									<p>Enter Note for Cancellation *</p>
+									<textarea
+										rows={3}
+										onChange={(e) => setCancelReason(e.target.value)}
+										className={` w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none  focus:ring-1 focus:ring-dashInActiveBtnText`}
+									/>
+								</div>
+								<div className="flex w-full justify-between">
+									<button
+										className="btn btn-error btn-sm"
+										type="button"
+										onClick={() => {
+											if (!cancelReason) {
+												showErrorToastMessage("Cancellation note is required.");
+												return;
+											}
+											deleteSchedule(field, index);
+											document.getElementById(`delete-schedule-services-${index}`).close();
+										}}
+									>
+										Remove Schedule
+									</button>
+									<button
+										type="button"
+										className="btn btn-primary btn-sm"
+										onClick={() => {
+											document.getElementById(`delete-schedule-services-${index}`).close();
+										}}
+									>
+										Keep Schedule
+									</button>
+								</div>
+							</div>
+						</dialog>
+					</div>
+				))}
 
 				<>
 					{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
@@ -2505,7 +2544,10 @@ const handleSubcontractorSelected = async (subcontractorId) => {
 								<button
 									type="button"
 									className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
-									onClick={() => setShowSSRForm(false)}
+									onClick={() => {
+										setShowSSRForm(false);
+										resetFormForNewSSR();
+									}}
 								>
 									Cancel
 								</button>
