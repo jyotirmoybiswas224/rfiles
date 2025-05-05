@@ -989,6 +989,53 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			console.error("Failed to copy:", err);
 		}
 	};
+const serviceNoteRef = useRef(null);
+
+useEffect(() => {
+  if (generatorData?.transporterId!=user.uid) return;
+    const textarea = serviceNoteRef.current;
+  if (!textarea) return;
+  let cursorPosition = 0;
+  let wasFocused = false;
+  
+  const handleFocus = () => {
+    wasFocused = true;
+  };
+  
+  const handleBlur = () => {
+    wasFocused = false;
+  };
+  
+  const handleInput = () => {
+    cursorPosition = textarea.selectionStart;
+  };
+  
+  const handleRender = () => {
+    if (wasFocused) {
+      textarea.focus();
+      textarea.setSelectionRange(cursorPosition, cursorPosition);
+    }
+  };
+  
+  textarea.addEventListener('focus', handleFocus);
+  textarea.addEventListener('blur', handleBlur);
+  textarea.addEventListener('input', handleInput);
+  
+  const observer = new MutationObserver(handleRender);
+  observer.observe(textarea.parentNode, { 
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true
+  });
+  
+  return () => {
+    textarea.removeEventListener('focus', handleFocus);
+    textarea.removeEventListener('blur', handleBlur);
+    textarea.removeEventListener('input', handleInput);
+    observer.disconnect();
+  };
+}, [generatorData?.transporterId]);
 	// 	const formRef = useRef(null);
 
 	// useEffect(() => {
@@ -1060,6 +1107,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		console.log("ssr data", ssrData);
 		const getFormData = () => {
 			console.log("ssr data", ssrData);
+			// Add this to the renderSSRForm function in your component
+
+
 
 			if (isReadOnly && ssrData) {
 				const isReceived = ssrData.subcontractorId === user?.uid;
@@ -1210,6 +1260,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				}));
 		};
 
+
 		return (
 			<div className="pb-4">
 				<div className="flex gap-8 w-full">
@@ -1323,16 +1374,17 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						{!isReadOnly && errors.requestedStartDate && (
 							<p className="text-red-500 text-sm mt-1">{errors.requestedStartDate.message}</p>
 						)}
-						<Textarea
-							value={formData.serviceNote}
-							onChange={(e) => {
-								if (!isReadOnly) {
-									setValue("serviceNote", e.target.value);
-								}
-							}}
-							label="Service Note To Subcontractor"
-							isDisabled={isReadOnly}
-						/>
+					<Textarea
+  ref={serviceNoteRef} // Add this ref
+  value={formData.serviceNote}
+  onChange={(e) => {
+    if (!isReadOnly) {
+      setValue("serviceNote", e.target.value);
+    }
+  }}
+  label="Service Note To Subcontractor"
+  isDisabled={isReadOnly}
+/>
 					</div>
 
 					<div className="w-1/2 space-y-4">
@@ -1643,29 +1695,28 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		try {
 			const transporterDoc = await getDoc(doc(db, COLLECTIONS.transporters, transporterId));
 			const transporterMarketDoc = await getDoc(doc(db, COLLECTIONS.octoMarketUsers, transporterId));
-
+	
 			if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
 				console.log("No such transporter!");
 				return [];
 			}
-
+	
 			setIsOctoMarketUser(true);
-
+	
 			const data = transporterDoc.data();
 			const transporterMarketData = transporterMarketDoc.data();
-			console.log("subData", { data, octoData: transporterMarketData });
-
+	
 			if (!transporterMarketData) return [];
-
+	
 			const contractorRelationships = transporterMarketData.connections || {};
 			const acceptedRelationships = Object.entries(contractorRelationships).filter(
 				([_, relationship]) => relationship.status === "accepted"
 			);
 			const contractorPromises = acceptedRelationships.map(async ([contractorId, relationship]) => {
 				const contractorDoc = await getDoc(doc(db, COLLECTIONS.transporters, contractorId));
-
+	
 				if (!contractorDoc.exists()) return null;
-
+	
 				const contractorData = contractorDoc.data();
 				return {
 					id: contractorId,
@@ -1681,22 +1732,9 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					transporterOctoId: contractorData.transporterOctoId,
 				};
 			});
-
+	
 			const contractors = await Promise.all(contractorPromises);
-			return [
-				...contractors.filter(Boolean),
-				{
-					id: transporterDoc.id,
-					name: data.name ?? "--",
-					address: formatAdd(data),
-					generalEmail: data.generalEmail?.length > 0 ? data.generalEmail : "--",
-					phoneNumber: data.phoneNumber ?? "--",
-					website: data.website?.length ? data.website : "--",
-					sharedGenerators: data.allGens?.length ?? 0,
-					startDate: new Date(),
-					status: "",
-				},
-			];
+			return contractors.filter(Boolean);
 		} catch (error) {
 			console.error("Error fetching contractor data:", error);
 			return [];
