@@ -1841,88 +1841,139 @@ useEffect(() => {
 			showErrorToastMessage("Error sending request to subcontractor");
 		}
 	};
-
-	const handleCancelCurrentSSR = async () => {
-		if (!cancelReason) {
-			showErrorToastMessage("Cancellation note is required.");
-			return;
-		}
-
-		const ssrToCancel = sentSubcontractorRequests[currentSSRIndex];
-		if (!ssrToCancel) {
-			showErrorToastMessage("Cannot identify the SSR to cancel");
-			return;
-		}
-
-		try {
-			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
-			const transporterDoc = await getDoc(currentTransporterRef);
-			const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
-			const subcontractorDoc = await getDoc(subcontractorRef);
-
-			const cancellationData = {
-				status: SERVICE_STATUS.CANCELLED,
-				cancellationNote: cancelReason,
-				cancelledAt: new Date().toISOString(),
-			};
-
-			if (transporterDoc.exists()) {
-				const transporterData = transporterDoc.data();
-				let sharedGenerators = transporterData.sharedGenerators || {};
-
-				if (sharedGenerators.fromMe && sharedGenerators.fromMe.length) {
-					const requestIndex = sharedGenerators.fromMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
-
-					if (requestIndex !== -1) {
-						sharedGenerators.fromMe[requestIndex] = {
-							...sharedGenerators.fromMe[requestIndex],
-							...cancellationData,
-						};
-
-						await updateDoc(currentTransporterRef, { sharedGenerators });
+				const handleCancelCurrentSSR = async () => {
+					if (!cancelReason) {
+					  showErrorToastMessage("Cancellation note is required.");
+					  return;
 					}
-				}
-			}
-
-			if (subcontractorDoc.exists()) {
-				const subcontractorData = subcontractorDoc.data();
-				let subSharedGenerators = subcontractorData.sharedGenerators || {};
-
-				if (subSharedGenerators.toMe && subSharedGenerators.toMe.length) {
-					const subRequestIndex = subSharedGenerators.toMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
-
-					if (subRequestIndex !== -1) {
-						subSharedGenerators.toMe[subRequestIndex] = {
-							...subSharedGenerators.toMe[subRequestIndex],
-							...cancellationData,
-						};
-
-						await updateDoc(subcontractorRef, { sharedGenerators: subSharedGenerators });
+				  
+					const ssrToCancel = sentSubcontractorRequests[currentSSRIndex];
+					if (!ssrToCancel) {
+					  showErrorToastMessage("Cannot identify the SSR to cancel");
+					  return;
 					}
-				}
-			}
-
-			const updatedRequests = sentSubcontractorRequests.map((req) =>
-				req.ssrId === ssrToCancel.ssrId
-					? {
-							...req,
-							...cancellationData,
+				  
+					try {
+					  // Create a batch for all updates
+					  const batch = writeBatch(db);
+					  
+					  const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
+					  const transporterDoc = await getDoc(currentTransporterRef);
+					  const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
+					  const subcontractorDoc = await getDoc(subcontractorRef);
+				  
+					  const cancellationData = {
+						status: SERVICE_STATUS.CANCELLED,
+						cancellationNote: cancelReason,
+						cancelledAt: new Date().toISOString(),
+					  };
+				  
+					  // Update transporter's shared generators
+					  if (transporterDoc.exists()) {
+						const transporterData = transporterDoc.data();
+						let sharedGenerators = transporterData.sharedGenerators || {};
+				  
+						if (sharedGenerators.fromMe && sharedGenerators.fromMe.length) {
+						  const requestIndex = sharedGenerators.fromMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
+				  
+						  if (requestIndex !== -1) {
+							sharedGenerators.fromMe[requestIndex] = {
+							  ...sharedGenerators.fromMe[requestIndex],
+							  ...cancellationData,
+							};
+				  
+							batch.update(currentTransporterRef, { sharedGenerators });
+						  }
+						}
 					  }
-					: req
-			);
-
-			setSentSubcontractorRequests(updatedRequests);
-			setActiveSentSSRs((prevActive) => prevActive.filter((ssr) => ssr.ssrId !== ssrToCancel.ssrId));
-
-			showSuccessToastMessage("Subcontractor request cancelled successfully");
-			resetFormForNewSSR();
-			document.getElementById(`delete-SSR`).close();
-			setCancelReason("");
-		} catch (error) {
-			console.error("Error cancelling SSR:", error);
-			showErrorToastMessage("Error cancelling subcontractor request");
-		}
-	};
+				  
+					  // Update subcontractor's shared generators
+					  if (subcontractorDoc.exists()) {
+						const subcontractorData = subcontractorDoc.data();
+						let subSharedGenerators = subcontractorData.sharedGenerators || {};
+				  
+						if (subSharedGenerators.toMe && subSharedGenerators.toMe.length) {
+						  const subRequestIndex = subSharedGenerators.toMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
+				  
+						  if (subRequestIndex !== -1) {
+							subSharedGenerators.toMe[subRequestIndex] = {
+							  ...subSharedGenerators.toMe[subRequestIndex],
+							  ...cancellationData,
+							};
+				  
+							batch.update(subcontractorRef, { sharedGenerators: subSharedGenerators });
+						  }
+						}
+					  }
+				  
+					  // Get the generator ID from the SSR to cancel
+					  const generatorId = ssrToCancel.genId;
+					  if (!generatorId) {
+						showErrorToastMessage("Generator ID not found in the SSR");
+						return;
+					  }
+				  
+					  // Update generator document
+					  const generatorRef = doc(db, COLLECTIONS.generators, generatorId);
+					  const generatorDoc = await getDoc(generatorRef);
+				  
+					  if (!generatorDoc.exists()) {
+						console.error("Generator document not found");
+						return;
+					  }
+				  
+					  const generatorData = generatorDoc.data();
+					  const existingSubcontractors = generatorData.subContractors || [];
+					  
+					  // Filter out the canceled subcontractor
+					  const remainingSubcontractors = existingSubcontractors.filter(
+						(sub) => sub.id !== ssrToCancel.subcontractorId
+					  );
+					  
+					  // Filter active SSRs for this generator
+					  const filteredSSRforGen = activeSentSSRs.filter(
+						(ssrs) => ssrs.genId === generatorId && ssrs.ssrId == ssrToCancel.ssrId
+					  );
+				  
+					  // Only update subcontractors if this is the only active SSR for this generator
+					  // (Changed condition logic to be more explicit)
+					  let updatedSubcontractors = generatorData.subContractors;
+					  if (filteredSSRforGen.length === 1) {
+						// If no other active SSRs for this generator, remove the subcontractor
+						updatedSubcontractors = remainingSubcontractors;
+						
+						// Update the isSubContracted flag based on whether any subcontractors remain
+						batch.update(generatorRef, {
+						  subContractors: updatedSubcontractors,
+						  isSubContracted: remainingSubcontractors.length > 0
+						});
+					  } 
+				  
+					  // Commit all the batched updates
+					  await batch.commit();
+				  
+					  // Update UI state
+					  const updatedRequests = sentSubcontractorRequests.map((req) =>
+						req.ssrId === ssrToCancel.ssrId
+						  ? {
+							  ...req,
+							  ...cancellationData,
+							}
+						  : req
+					  );
+				  
+					  setSentSubcontractorRequests(updatedRequests);
+					  setActiveSentSSRs((prevActive) => prevActive.filter((ssr) => ssr.ssrId !== ssrToCancel.ssrId));
+				  
+					  showSuccessToastMessage("Subcontractor request cancelled successfully");
+					  resetFormForNewSSR();
+					  document.getElementById(`delete-SSR`).close();
+					  setCancelReason("");
+					} catch (error) {
+					  console.error("Error cancelling SSR:", error);
+					  showErrorToastMessage("Error cancelling subcontractor request");
+					}
+				  };
 	const resetFormForNewSSR = () => {
 		setValue("selectedSubContractor", null);
 		setValue("serviceSchedules.serviceFrequency.type", "");
@@ -2772,13 +2823,13 @@ useEffect(() => {
 							{errors.serviceInstruction && (
 								<p className="text-red-500 text-sm mt-1">{errors.serviceInstruction.message}</p>
 							)}
-							<Controller
+							{(showSSRFrom||activeSentSSRs.length > 0)&&<Controller
 								name="octoConnectNote"
 								control={instructionControl}
 								render={({ field: { onChange, value } }) => (
 									<Textarea value={value} onChange={onChange} label="OCTO Connect" placeholder={"Contractor's Note"} />
 								)}
-							/>
+							/>}
 							{errors.octoConnectNote && <p className="text-red-500 text-sm mt-1">{errors.octoConnectNote.message}</p>}
 						</div>
 					</div>
