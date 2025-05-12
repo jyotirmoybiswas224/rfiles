@@ -19,7 +19,13 @@ import ContactUsForm from "./components/ContactUsForm/ContactUsForm";
 import { useGeneratorUser } from "../../../context/GeneratorUserContext";
 import { useNavigate } from "react-router-dom";
 import Loader from "../../../components/UI/loaders/Loader";
-import { dateFormatter, daysOfWeek, randomizeCoordinates, renderAddress } from "../../../utils/helpers";
+import {
+	dateFormatter,
+	daysOfWeek,
+	formatDateString,
+	randomizeCoordinates,
+	renderAddress,
+} from "../../../utils/helpers";
 import {
 	frequencyPrimaryOptions,
 	frequencySecondaryOptions,
@@ -29,12 +35,12 @@ import {
 import CustomAzureGeneratorDashboardMap from "./CustomAzureGeneratorDashboardMap";
 import { AzureMapsProvider } from "react-azure-maps";
 import CalendarWithTimeSlots from "../../admin/generator-management/components/generators/components/detail-forms/components/open-calendar/GeneratorCalendarComponent";
-import { getGeneratorById } from "../../../utils/firebaseOperations";
+import { getGeneratorById, GetTransporterDataByUID } from "../../../utils/firebaseOperations";
 import { useGeneratorData } from "./components/GeneratorDataContext";
 import ChildDropdown from "./components/dropDowns/childDropdown";
 import ParentDropdown from "./components/dropDowns/parentDropdown";
 import GeneratorUserAccBtn from "../GenUserAccountButton/GeneratorUserAccountButton";
-import { flushSync } from 'react-dom';
+import { flushSync } from "react-dom";
 
 const GeneratorDashboard = () => {
 	const { user, authLoading, generatorData: data, allServices: genService } = useGeneratorUser();
@@ -66,58 +72,26 @@ const GeneratorDashboard = () => {
 	const [serviceCompletionText, setServiceCompletionText] = useState("");
 	const [todayStartedRoute, setTodayStartedRoute] = useState();
 	const [isLoadingTracking, setIsLoadingTracking] = useState(false);
-
+	const [transporterData, setTransporterData] = useState([]);
 
 	useEffect(() => {
 		if (!data?.id) return;
-		
+
 		console.log("Initial data loading for generator:", data.id);
 		setIsLoadingTracking(true);
 		setGeneratorData(data);
-		setAllServices(genService);
 		if (data?.parentAccount) {
-		  setParentAccount(false);
+			setParentAccount(false);
 		} else {
-		  setParentAccount(true);
+			setParentAccount(true);
 		}
-		performInitialServiceStatusCheck(data.id);
-		
-	  }, [data?.id]);
+	}, [data?.id]);
 
-useEffect(() => {
-	if (!generatorData?.id) return;
-	if (generatorData.id !== data?.id) {
-	  console.log(`Generator changed to ${generatorData.id} (different from context's ${data?.id})`);
-	  setIsLoadingTracking(true);
-	  performInitialServiceStatusCheck(generatorData.id);
-	}
-  }, [generatorData?.id]);
-
-	  
-	  const generatorCompletionStatusRef = useRef({});
-
-useEffect(() => {
-	window._processingGenerator = null;
-	generatorCompletionStatusRef.current = {};
-	
-	return () => {
-	  if (subscriptionsRef.current) {
-		subscriptionsRef.current.forEach((unsub) => {
-		  if (typeof unsub === 'function') {
-			try {
-			  unsub();
-			} catch (e) {
-			  console.error("Error unsubscribing:", e);
-			}
-		  }
-		});
-		subscriptionsRef.current = [];
-	  }
-	};
-  }, []);
 	useEffect(() => {
+		console.log("generatorData",generatorData);
+		
 		if (!generatorData?.id) return;
-		const q = query(collection(db, COLLECTIONS.serviceSchedules), where("generatorId", "==", generatorData.id));
+		const q = query(collection(db, COLLECTIONS.serviceSchedules), where("generatorId", "==", generatorData?.id));
 		const unsubscribe = onSnapshot(q, async (snap) => {
 			try {
 				console.log("Snapshot received:", snap);
@@ -225,7 +199,7 @@ useEffect(() => {
 			navigate("/generator-portal-auth");
 		}
 	}, [authLoading, user, navigate, generatorData]);
-	
+
 	useEffect(() => {
 		console.log({ generatorData });
 		if (!generatorData) return;
@@ -252,7 +226,7 @@ useEffect(() => {
 			return serviceDate.getTime() >= today.getTime();
 		});
 
-		const filteredCompleted = allServices?.filter((el) => el.status === "COMPLETE");
+		const filteredCompleted = allServices?.filter((el) => el.status === SERVICE_STATUS.COMPLETE);
 		if (filteredCompleted) {
 			console.log("completed service", filteredCompleted, "yguyg", filteredCompleted[filteredCompleted.length - 1]);
 
@@ -265,848 +239,516 @@ useEffect(() => {
 			//	setNextService(filteredDate[0]);
 		}
 	}, [allServices]);
-	const fetchAvailableServices = async (snap) => {
-		try {
-			//setIsLoadingServices(true);
-			await new Promise((resolve) => setTimeout(resolve));
-			//setDelay(5000);
-			let tempServices = [];
-			const jobs = snap.docs.map(async (el) => {
-				if (el.exists()) {
-					const data = { ...el.data(), id: el.id };
-					if (data?.routeId?.length > 0) {
-						const routeRes = await getDoc(doc(db, COLLECTIONS.routes, data.routeId));
-						if (routeRes.exists()) {
-							data.routeData = { ...routeRes.data(), id: routeRes.id };
-						}
-					}
-					if (data?.serviceScheduleId?.length > 0) {
-						const serviceScheduleRes = await getDoc(doc(db, COLLECTIONS.serviceSchedules, data.serviceScheduleId));
-						if (serviceScheduleRes.exists()) {
-							data.serviceScheduleData = { ...serviceScheduleRes.data(), id: serviceScheduleRes.id };
-						}
-					}
-					tempServices.push(data);
-				}
-			});
-			await Promise.all(jobs);
-			tempServices = tempServices.filter(
-				(el) => el.status !== SERVICE_STATUS.DELETED && el.status !== SERVICE_STATUS.CANCELLED
-			);
-			const today = new Date();
-			const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
-			console.log("todayUTC",todayUTC);
-			
-			setNextService(
-				tempServices
-					.filter((el) => {
-						if (
-							el.date.toDate() >= todayUTC&&el.status !== SERVICE_STATUS.COMPLETE
-						) {
-							return true;
-						} else {
-							return false;
-						}
-					})
-					.sort((a, b) => a.date.toDate() - b.date.toDate())
-			);
-			setLastCompleted([
-				...tempServices
-					.filter((el) => el.status === SERVICE_STATUS.COMPLETE)
-					.sort((a, b) => b.date.toDate() - a.date.toDate()),
-			]);
-
-			const todayServices = tempServices
-			.filter((el) => {
-			  const serviceDate = el.date.toDate();
-			  return (
-				serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
-				serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
-				serviceDate.getUTCDate() === todayUTC.getUTCDate()
-			  );
-			})
-			.sort((a, b) => a.date.toDate() - b.date.toDate());
-		  
-		  console.log("Today services data:", todayServices); 
-		  setTodayService(todayServices);
-			console.log("tempServ",tempServices,nextService[0]?.date.toDate(),todayService[0]?.date.toDate(),todayService,todayUTC);
-			
-		} catch (error) {
-			console.log(error);
-		} finally {
-			//setIsLoadingServices(false);
-		}
-	};
-
 
 	const startDate = new Date();
-	startDate.setDate(startDate.getDate()-1)
+	startDate.setDate(startDate.getDate() - 30);
 	const endDate = new Date();
 	endDate.setDate(endDate.getDate() + 30);
-    const subscriptionsRef = useRef([]);     
+	useEffect(() => {
+		setServiceCompletionText("");
+		setCompleted(false);
+		setGeneratorWaypointCompleted(false);
+		setWaypointsRemaining("Stops Remaining");
+		setRouteStarted(false);
+		setProgressbar("0%");
+		setStopsRemaining(0);
+	}, [generatorData?.id]);
 
-useEffect(() => {
-	if (!generatorData?.id) return;
-	const currentGenId = generatorData.id;
-	const unsubscribers = [];
-	
-	const date = new Date();
-	const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
-	const timestampId = todayUTC.toISOString();
-	console.log("genId that is being tracked",currentGenId,generatorData?.id);
-	
-	setTimeout(() => {
-	  const servicesUnsubscribe = onSnapshot(
-		query(
-		  collection(db, COLLECTIONS.scheduledServices),
-		  where("generatorId", "==", currentGenId),
-		  where("status", "not-in", [SERVICE_STATUS.CANCELLED, SERVICE_STATUS.DELETED]),
-		  where("date", ">=", Timestamp.fromDate(startDate)),
-		  where("date", "<=", Timestamp.fromDate(endDate)),
-		  orderBy("date", "asc"),
-		),
-		async (snap) => {
-		  if (generatorData.id !== currentGenId) {
-			console.log(`Ignoring services snapshot - generator changed`);
-			return;
-		  }
-		  
-		  try {
-			await fetchAvailableServices(snap);
-			if (!todayService || todayService.length === 0) {
-			  console.log(`No today services found for generator ${currentGenId}`);
-			  return;
-			}
-			
-			console.log(`Processing routes for generator ${currentGenId}`,timestampId);
-			await processRoutesForTracking(todayService, timestampId, currentGenId);
-		  } catch (error) {
-			console.error(`Error processing services for generator ${currentGenId}:`, error);
-		  }
+	useEffect(() => {
+		if (!generatorData?.id) return;
+
+		const unsubscribers = [];
+		const date = new Date();
+		const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
+
+		try {
+			const servicesUnsubscribe = onSnapshot(
+				query(
+					collection(db, COLLECTIONS.scheduledServices),
+					where("generatorId", "==", generatorData?.id),
+					where("status", "not-in", [SERVICE_STATUS.CANCELLED, SERVICE_STATUS.DELETED]),
+					where("date", ">=", Timestamp.fromDate(startDate)),
+					where("date", "<=", Timestamp.fromDate(endDate)),
+					orderBy("date", "asc")
+				),
+				async (snap) => {
+					try {
+						let tempServices = [];
+						const jobs = snap.docs.map(async (el) => {
+							if (el.exists()) {
+								const data = { ...el.data(), id: el.id };
+								if (data?.routeId?.length > 0) {
+									const routeRes = await getDoc(doc(db, COLLECTIONS.routes, data.routeId));
+									if (routeRes.exists()) {
+										data.routeData = { ...routeRes.data(), id: routeRes.id };
+									}
+								}
+								if (data?.serviceScheduleId?.length > 0) {
+									const serviceScheduleRes = await getDoc(
+										doc(db, COLLECTIONS.serviceSchedules, data.serviceScheduleId)
+									);
+									if (serviceScheduleRes.exists()) {
+										data.serviceScheduleData = { ...serviceScheduleRes.data(), id: serviceScheduleRes.id };
+									}
+								}
+								tempServices.push(data);
+							}
+						});
+
+						await Promise.all(jobs);
+
+						tempServices = tempServices.filter(
+							(el) => el.status !== SERVICE_STATUS.DELETED && el.status !== SERVICE_STATUS.CANCELLED
+						);
+
+						const today = new Date();
+						const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+
+						setNextService(
+							tempServices
+								.filter((el) => {
+									const isMarkedAsClosed = el.markedAsClosedAt && el.markedAsClosedAt.toDate instanceof Function;
+									if (el.date.toDate() >= todayUTC && el.status !== SERVICE_STATUS.COMPLETE && !isMarkedAsClosed) {
+										return true;
+									} else {
+										return false;
+									}
+								})
+								.sort((a, b) => a.date.toDate() - b.date.toDate())
+						);
+
+						setLastCompleted(
+							tempServices
+								.filter((el) => {
+									if (el.status === SERVICE_STATUS.COMPLETE && el.completedAt) {
+										const completedDate = new Date(el.completedAt.toDate());
+										const completedUTC = new Date(
+											Date.UTC(
+												completedDate.getFullYear(),
+												completedDate.getMonth(),
+												completedDate.getDate(),
+												0,
+												0,
+												0,
+												0
+											)
+										);
+
+										return completedUTC.getTime() <= todayUTC.getTime();
+									}
+									return false;
+								})
+								.sort((a, b) => b.completedAt.toDate() - a.completedAt.toDate())
+						);
+
+						const todayServices = tempServices
+							.filter((el) => {
+								const serviceDate = el.date.toDate();
+								return (
+									serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
+									serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
+									serviceDate.getUTCDate() === todayUTC.getUTCDate()
+								);
+							})
+							.sort((a, b) => a.date.toDate() - b.date.toDate());
+
+						console.log("Today services data:", todayServices);
+						setTodayService(todayServices);
+
+						if (todayServices.length > 0) {
+							await checkTodayService(todayServices);
+						} else {
+							await checkAllRoutesForTodayServices(generatorData?.id);
+						}
+
+						if (serviceCompletionText && todayStartedRoute) {
+							console.log(
+								"relevant data",
+								routeStarted,
+								todayStartedRoute,
+								generatorWaypointCompleted,
+								serviceCompletionText
+							);
+							await checkStopsRemaing(todayStartedRoute);
+						}
+					} catch (error) {
+						console.log("Error processing services:", error);
+					}
+				}
+			);
+
+			unsubscribers.push(servicesUnsubscribe);
+			return () => {
+				unsubscribers.forEach((unsubscribe) => unsubscribe());
+			};
+		} catch (error) {
+			console.log("Error setting up snapshot listener:", error);
 		}
-	  );
-	  
-	  unsubscribers.push(servicesUnsubscribe);
-	  subscriptionsRef.current = unsubscribers;
-	}, 300); 
-	
-	return () => {
-	  if (subscriptionsRef.current) {
-		subscriptionsRef.current.forEach((unsub) => {
-		  if (typeof unsub === 'function') {
-			try {
-			  unsub();
-			} catch (e) {
-			  console.error("Error unsubscribing:", e);
-			}
-		  }
-		});
-		subscriptionsRef.current = [];
-	  }
-	};
-  }, [generatorData?.id]);
+	}, [generatorData?.id, serviceCompletionText]);
 
-useEffect(() => {
-	return () => {
-	  console.log("Component unmounting - cleaning up");
-	   if (subscriptionsRef.current) {
-		subscriptionsRef.current.forEach((unsub) => {
-		  if (typeof unsub === 'function') {
-			try {
-			  unsub();
-			} catch (e) {
-			  console.error("Error unsubscribing:", e);
+	async function checkTodayService(tservice) {
+		const date = new Date();
+		const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
+		const totalService = tservice.length;
+		const completedServices = tservice.filter((service) => {
+			const isMarkedAsClosed = service.markedAsClosedAt && service.markedAsClosedAt.toDate instanceof Function;
+			if (service.status == SERVICE_STATUS.COMPLETE || isMarkedAsClosed) {
+				return true;
+			} else {
+				return false;
 			}
-		  }
-		});
-		subscriptionsRef.current = [];
-	  }
-	  
-	  generatorCompletionStatusRef.current = {};
-	  window._processedGenerators = {};
-	};
-  }, []);
-
-async function performInitialServiceStatusCheck(genId) {
-	if (!genId) return;
-	
-	console.log(`Performing initial service status check for generator ${genId}`);
-	
-	try {
-	  const date = new Date();
-	  const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
-	  const todayEndUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999));
-	  
-	  const todayStartTimestamp = Timestamp.fromDate(todayUTC);
-	  const todayEndTimestamp = Timestamp.fromDate(todayEndUTC);
-	  const servicesQuery = query(
-		collection(db, COLLECTIONS.scheduledServices),
-		where("generatorId", "==", genId),
-		where("date", ">=", todayStartTimestamp),
-		where("date", "<=", todayEndTimestamp),
-		where("status", "not-in", [SERVICE_STATUS.CANCELLED, SERVICE_STATUS.DELETED])
-	  );
-	  
-	  const servicesSnapshot = await getDocs(servicesQuery);
-	  const services = servicesSnapshot.docs.map(doc => ({...doc.data(), id: doc.id}));
-	  
-	  console.log(`Found ${services.length} services for generator ${genId} on initial check`);
-	  
-	  if (services.length > 0) {
-		setTodayService(services.sort((a, b) => a.date.toDate() - b.date.toDate()));
-		const totalServices = services.length;
-		const completedServices = services.filter(service => service.status === SERVICE_STATUS.COMPLETE).length;
-		const allComplete = totalServices > 0 && completedServices === totalServices;
-		const completionText = `${completedServices} of ${totalServices} services completed`;
-		console.log(`Initial status for ${genId}: ${completionText}, allComplete: ${allComplete}`);
+		}).length;
+		const completionText = `${completedServices} of ${totalService} services completed`;
 		let routeIsStarted = false;
 		let selectedServiceObj = null;
-		const routeIds = [...new Set(services.map(s => s.routeId))].filter(Boolean);
+
+		const routeIds = [...new Set(tservice.map((s) => s.routeId))].filter(Boolean);
+		console.log("routeIDs", routeIds);
+
 		for (const routeId of routeIds) {
-		  if (!routeId) continue;
-		  
-		  try {
-			const routeRef = doc(db, COLLECTIONS.routes, routeId);
-			const dailyRouteRef = doc(routeRef, "dailyRoutes", todayUTC.toISOString());
-			const dailyRouteData = await getDoc(dailyRouteRef);
-			
-			if (dailyRouteData.exists()) {
-			  const routeData = dailyRouteData.data();
-			  
-			  if (routeData.assignedDriverId && routeData.assignedServiceVehicleId) {
-				const routeServices = services.filter(s => s.routeId === routeId);
-				
-				for (const service of routeServices) {
-				  if (service.status !== "CANCELLED" && service.status !== "DELETED") {
-					selectedServiceObj = service;
-					routeIsStarted = true;
-				  if (service.status === "PENDING" || service.status === "INPROGRESS") {
-					  break;
+			if (!routeId) continue;
+
+			try {
+				const routeRef = doc(db, COLLECTIONS.routes, routeId);
+				const dailyRouteRef = doc(routeRef, "dailyRoutes", todayUTC.toISOString());
+				const dailyRouteData = await getDoc(dailyRouteRef);
+
+				if (dailyRouteData.exists()) {
+					const routeData = dailyRouteData.data();
+
+					if (routeData.assignedDriverId && routeData.assignedServiceVehicleId) {
+						const routeServices = tservice.filter((s) => s.routeId === routeId);
+						const inProgressService = routeServices.find(
+							(s) =>
+								s.status === SERVICE_STATUS.INPROGRESS &&
+								s.status !== SERVICE_STATUS.CANCELLED &&
+								s.status !== SERVICE_STATUS.DELETED
+						);
+
+						if (inProgressService) {
+							selectedServiceObj = { service: inProgressService, routeData };
+							routeIsStarted = true;
+							break;
+						}
+
+						const pendingService = routeServices.find(
+							(s) =>
+								s.status === SERVICE_STATUS.PENDING &&
+								s.status !== SERVICE_STATUS.CANCELLED &&
+								s.status !== SERVICE_STATUS.DELETED
+						);
+
+						if (pendingService) {
+							selectedServiceObj = { service: pendingService, routeData };
+							routeIsStarted = true;
+							break;
+						}
 					}
-				  }
 				}
-				
-				if (routeIsStarted) break;
-			  }
+			} catch (error) {
+				console.error(`Error checking route ${routeId} during initial status check:`, error);
 			}
-		  } catch (error) {
-			console.error(`Error checking route ${routeId} during initial status check:`, error);
-		  }
 		}
-		
-		flushSync(() => {
-		  if (routeIsStarted && selectedServiceObj) {
+
+		if (routeIsStarted && selectedServiceObj) {
 			setTodayStartedRoute(selectedServiceObj);
 			setRouteStarted(true);
-		  } else {
+		} else {
 			setRouteStarted(false);
-		  }
-		  
-		  setServiceCompletionText(completionText);
-		  setGeneratorWaypointCompleted(allComplete);
-		  
-		  generatorCompletionStatusRef.current[genId] = allComplete;
-		});
-		try {
-		  localStorage.setItem(`completion_text_${genId}`, completionText);
-		  localStorage.setItem(`waypoint_completed_${genId}`, JSON.stringify(allComplete));
-		  localStorage.setItem(`route_started_${genId}`, JSON.stringify(routeIsStarted));
-		} catch (e) {
-		  console.error("Error saving to localStorage:", e);
 		}
-	  } else {
-		console.log(`No services found for ${genId} during initial check`);
-		
-		flushSync(() => {
-		  setServiceCompletionText("");
-		  setGeneratorWaypointCompleted(false);
-		  setRouteStarted(false);
-		});
-	  }
-	} catch (error) {
-	  console.error(`Error in initial service status check for ${genId}:`, error);
-	} finally {
-	  setIsLoadingTracking(false);
+		setServiceCompletionText(completionText);
+		await checkTodayServicesCompletion(generatorData?.id, tservice);
 	}
-  }
 
+	async function checkTodayServicesCompletion(generatorId, todayServices) {
+		if (!generatorId) return false;
 
-  async function processRoutesForTracking(todayServices, timestampId, currentGenId) {
-	const isFirstRun = !window._processedGenerators;
-	window._processedGenerators = window._processedGenerators || {};
-	
-	console.log(`Processing routes for generator ${currentGenId}, first run: ${isFirstRun}`);
-	console.log(`Current generator in state: ${generatorData.id}`);
-	
-	if (generatorData.id === currentGenId) {
-	  flushSync(() => {
-		setGeneratorWaypointCompleted(false);
-	  });
-	  generatorCompletionStatusRef.current[currentGenId] = false;
-	}
-	const unsubscribers = [];
-	
-	if (!todayServices || todayServices.length === 0) {
-	  console.log(`No today services for generator ${currentGenId}`);
-	  setIsLoadingTracking(false);
-	  return [];
-	}
-		if (generatorData.id !== currentGenId) {
-	  console.log(`Generator changed, cancelling route tracking (current: ${generatorData.id}, expected: ${currentGenId})`);
-	  setIsLoadingTracking(false);
-	  return [];
-	}
-	
-	try {
-	  const generatorRoutesForDay = [...new Set(todayServices?.map((service) => service.routeId))];
-	  
-	  let anyRouteStarted = false;
-	  let selectedService = null;
-	  
-	  console.log(`Processing ${generatorRoutesForDay.length} routes for generator ${currentGenId}`);
-	  
-	  for (const routeId of generatorRoutesForDay) {
-		if (!routeId) continue;
-		
-		console.log(`Checking route ${routeId} for generator ${currentGenId}`);
-		
-		const routeRef = doc(db, COLLECTIONS.routes, routeId);
-		const dailyRouteRef = doc(routeRef, "dailyRoutes", timestampId);
-		
 		try {
-		  const dailyRouteSnapshot = await getDoc(dailyRouteRef);
-		  
-		  if (!dailyRouteSnapshot.exists()) {
-			console.log(`No daily route data for route ${routeId}`);
-			continue;
-		  }
-		  
-		  const routeData = dailyRouteSnapshot.data();
-		  const isRouteStarted = !!(routeData.assignedDriverId && routeData.assignedServiceVehicleId);
-		  
-		  console.log(`Route ${routeId} isRouteStarted: ${isRouteStarted}`);
-		  
-		  if (isRouteStarted) {
-			const relatedServices = todayServices.filter((s) => s.routeId === routeId);
-			
-			console.log(`Found ${relatedServices.length} related services for route ${routeId}`);
-			
-			for (const service of relatedServices) {
-			  if (generatorData.id !== currentGenId) {
-				console.log(`Generator changed during service processing (current: ${generatorData.id}, expected: ${currentGenId})`);
-				return unsubscribers;
-			  }
-			  
-			  const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, service.id));
-			  if (serviceDoc.exists()) {
-				const serviceData = serviceDoc.data();
-				console.log(`Service ${service.id} status: ${serviceData.status}`);
-				if (serviceData.status !== "CANCELLED" && serviceData.status !== "DELETED") {
-				  selectedService = service;
-				  anyRouteStarted = true;
-				  
-				  if (serviceData.status === "PENDING" || serviceData.status === "INPROGRESS") {
-					console.log(`Found active service ${service.id} with status ${serviceData.status}`);
-					break;
-				  }
-				}
-			  }
-			}
+			const incompleteDirectServices = todayServices.filter((service) => {
+				const isMarkedAsClosed = service.markedAsClosedAt && service.markedAsClosedAt.toDate instanceof Function;
+				return (
+					service.status !== SERVICE_STATUS.COMPLETE &&
+					service.status !== SERVICE_STATUS.CANCELLED &&
+					service.status !== SERVICE_STATUS.DELETED &&
+					!isMarkedAsClosed
+				);
+			});
 
-			if (selectedService && generatorData.id === currentGenId) {
-			  window._processedGenerators[currentGenId] = true;
-			  
-			  flushSync(() => {
-				setTodayStartedRoute(selectedService);
-				setRouteStarted(true);
+			if (incompleteDirectServices.length > 0) {
+				console.log("Incomplete services detected:", incompleteDirectServices);
 				setGeneratorWaypointCompleted(false);
-			  });
-			  
-			  generatorCompletionStatusRef.current[currentGenId] = false;
-			  const selectedDailyRouteRef = doc(routeRef, "dailyRoutes", timestampId);
-			  
-			  const dailyRouteUnsubscribe = onSnapshot(selectedDailyRouteRef, async (snapshot) => {
-				console.log(`Route update received for generator ${currentGenId}`);
-				console.log(`Current generator in state: ${generatorData.id}`);
-				if (generatorData.id !== currentGenId) {
-				  console.log(`Ignoring route update for different generator (current: ${generatorData.id}, expected: ${currentGenId})`);
-				  return;
-				}
-				
-				if (!snapshot.exists()) return;
-		
+				return false;
+			}
+
+			const today = new Date();
+			const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+			const routeIds = [...new Set(todayServices.map((s) => s.routeId))].filter(Boolean);
+
+			for (const routeId of routeIds) {
 				try {
-				  const currentServiceDoc = await getDoc(
-					doc(db, COLLECTIONS.scheduledServices, selectedService.id)
-				  );
-				  
-				  if (currentServiceDoc.exists()) {
-					const status = currentServiceDoc.data().status;
-					const isComplete = status === "COMPLETE";
-					generatorCompletionStatusRef.current[currentGenId] = isComplete;
-					
-					console.log(`Service status pre-check for ${currentGenId}: ${status}, isComplete: ${isComplete}`);
-					
-					const routeData = snapshot.data();
-					console.log(`Processing route data for generator ${currentGenId}:`, {
-					  hasWaypoints: !!routeData.waypoints,
-					  waypointCount: routeData.waypoints?.length || 0,
-					  assignedDriver: !!routeData.assignedDriverId,
-					  assignedVehicle: !!routeData.assignedServiceVehicleId
-					});
-					await processSelectedRouteData(selectedService, routeData, generatorRoutesForDay, currentGenId);
-					if (generatorData.id === currentGenId) {
-					  flushSync(() => {
-						setGeneratorWaypointCompleted(generatorCompletionStatusRef.current[currentGenId] || false);
-					  });
+					const routeRef = doc(db, COLLECTIONS.routes, routeId);
+					const dailyRouteRef = doc(routeRef, "dailyRoutes", todayUTC.toISOString());
+					const dailyRouteData = await getDoc(dailyRouteRef);
+
+					if (dailyRouteData.exists()) {
+						const routeData = dailyRouteData.data();
+						const waypoints = routeData.waypoints || [];
+						const generatorWaypoints = waypoints.filter((wp) => wp.id === generatorId);
+
+						for (const waypoint of generatorWaypoints) {
+							if (!waypoint.serviceId) continue;
+							const existingService = todayServices.find((s) => s.id === waypoint.serviceId);
+
+							if (!existingService) {
+								const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+								if (serviceDoc.exists()) {
+									const serviceData = serviceDoc.data();
+									const serviceDate = serviceData.date.toDate();
+									const isToday =
+										serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
+										serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
+										serviceDate.getUTCDate() === todayUTC.getUTCDate();
+									const isMarkedAsClosed =
+										serviceData.markedAsClosedAt && serviceData.markedAsClosedAt.toDate instanceof Function;
+
+									if (
+										isToday &&
+										serviceData.status !== SERVICE_STATUS.COMPLETE &&
+										serviceData.status !== SERVICE_STATUS.CANCELLED &&
+										serviceData.status !== SERVICE_STATUS.DELETED &&
+										!isMarkedAsClosed
+									) {
+										console.log(
+											`Incomplete service found in waypoint: ${waypoint.serviceId}, status: ${serviceData.status}`
+										);
+										setGeneratorWaypointCompleted(false);
+										return false;
+									}
+								}
+							}
+						}
 					}
-				  } else {
-					const routeData = snapshot.data();
-					await processSelectedRouteData(selectedService, routeData, generatorRoutesForDay, currentGenId);
-				  }
 				} catch (error) {
-				  console.error(`Error in onSnapshot completion pre-check:`, error);
-				  const routeData = snapshot.data();
-				  await processSelectedRouteData(selectedService, routeData, generatorRoutesForDay, currentGenId);
+					console.error(`Error checking waypoints for route ${routeId}:`, error);
+					setGeneratorWaypointCompleted(false);
+					return false;
 				}
-			  });
-			  unsubscribers.push(dailyRouteUnsubscribe);
-			  break;
 			}
-		  }
+
+			console.log(`All services for generator ${generatorId} are completed.`);
+			setGeneratorWaypointCompleted(true);
+			return true;
 		} catch (error) {
-		  console.error(`Error processing route ${routeId} for generator ${currentGenId}:`, error);
-		}
-	  }
-	  
-	  if (!anyRouteStarted) {
-		console.log(`No active routes found for generator ${currentGenId}, setting routeStarted to false`);
-		
-		if (!window._processedGenerators[currentGenId]) {
-		  flushSync(() => {
-			setRouteStarted(false);
+			console.error("Error in checkTodayServicesCompletion:", error);
 			setGeneratorWaypointCompleted(false);
-		  });
-		  generatorCompletionStatusRef.current[currentGenId] = false;
-		} else {
-		  console.log(`Skipping setRouteStarted(false) for generator ${currentGenId} as it was processed before`);
+			return false;
 		}
-	  }
-	  
-	  if (generatorData.id === currentGenId) {
-		await calculateServiceCompletionStats(currentGenId, timestampId, generatorRoutesForDay);
-	  }
-	   return unsubscribers;
-	  
-	} catch (error) {
-	  console.error(`Error in processRoutesForTracking for generator ${currentGenId}:`, error);
-	  return unsubscribers;
-	} finally {
-	  setIsLoadingTracking(false);
 	}
-  }
 
-  async function processSelectedRouteData(selectedService, routeData, generatorRoutesForDay, currentGenId) {
-	if (!selectedService || !routeData || !routeData.waypoints) {
-	  return;
-	}
-	
-	console.log(`Processing selected route data for generator ${currentGenId}`);
-	console.log(`Current generator in state: ${generatorData.id}`);
-	
-	// Ensure we're processing the right generator
-	if (generatorData.id !== currentGenId) {
-	  console.log(`Ignoring route data for different generator (current: ${generatorData.id}, expected: ${currentGenId})`);
-	  return;
-	}
-	
-	try {
-	  const date = new Date();
-	  const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
-	  const timestampId = todayUTC.toISOString();
-	  let generatorWaypointIndex = -1;
-	  let inProgressIndex = -1;
-	  let firstOccurrenceIndex = -1;
-	  
-	  console.log(`Current generator ID: ${generatorData.id}, waypoints count: ${routeData.waypoints.length}`);
-	  const generatorWaypoints = routeData.waypoints.filter(wp => wp.id === generatorData.id);
-	  console.log(`Found ${generatorWaypoints.length} waypoints for generator ${currentGenId}`);
-	  
-	  if (generatorWaypoints.length === 0) {
-		console.log(`No waypoints found for generator ${currentGenId}, exiting`);
-		return;
-	  }
-	  
-	  // Find all relevant waypoints for this generator
-	  for (let index = 0; index < routeData.waypoints.length; index++) {
-		const waypoint = routeData.waypoints[index];
-		
-		if (waypoint.id === generatorData.id) {
-		  console.log(`Found waypoint for current generator at index: ${index}, serviceId: ${waypoint.serviceId}`);
-		  
-		  if (firstOccurrenceIndex === -1) {
-			firstOccurrenceIndex = index;
-		  }
-		  
-		  try {
-			if (generatorData.id !== currentGenId) {
-			  console.log(`Generator changed during waypoint processing (current: ${generatorData.id}, expected: ${currentGenId})`);
-			  return;
-			}
-			
-			const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
-			
-			if (!serviceDoc.exists()) continue;
-			
-			const serviceData = serviceDoc.data();
-			console.log(`Service ${waypoint.serviceId} status: ${serviceData.status}`);
-			
-			if (serviceData.status === "INPROGRESS") {
-			  inProgressIndex = index;
-			  console.log(`Found INPROGRESS service at index ${index}`);
-			} else if (serviceData.status === "PENDING" && generatorWaypointIndex === -1) {
-			  generatorWaypointIndex = index;
-			  console.log(`Found PENDING service at index ${index}`);
-			} else if (serviceData.status === "COMPLETE") {
-			  console.log(`Found COMPLETE service at index ${index}`);
-			}
-		  } catch (error) {
-			console.error(`Error getting service data for waypoint at index ${index}:`, error);
-		  }
-		}
-	  }
-	  
-	  // Determine which waypoint to use
-	  if (inProgressIndex !== -1) {
-		generatorWaypointIndex = inProgressIndex;
-		console.log(`Using INPROGRESS waypoint at index ${inProgressIndex}`);
-	  } else if (generatorWaypointIndex === -1) {
-		generatorWaypointIndex = firstOccurrenceIndex;
-		console.log(`Using first occurrence at index ${firstOccurrenceIndex}`);
-	  }
-	  
-	  if (generatorWaypointIndex === -1) {
-		console.log(`No valid waypoint index found for generator ${currentGenId}`);
-		return;
-	  }
-	  
-	  // Get all service IDs up to this waypoint
-	  const serviceIds = routeData.waypoints
-		.slice(0, generatorWaypointIndex + 1)
-		.map((waypoint) => waypoint.serviceId)
-		.filter((id) => id);
-	  
-	  console.log(`Calculating progress based on ${serviceIds.length} services up to waypoint ${generatorWaypointIndex}`);
-	  
-	  // Count pending services
-	  let pendingCount = 0;
-	  let currentGenStatus = null;
-	  
-	  // Check the status of all services
-	  for (const serviceId of serviceIds) {
+	async function checkAllRoutesForTodayServices(generatorId) {
 		try {
-		  if (generatorData.id !== currentGenId) {
-			console.log(`Generator changed during service status check (current: ${generatorData.id}, expected: ${currentGenId})`);
-			return;
-		  }
-		  
-		  const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, serviceId));
-		  
-		  if (!serviceDoc.exists()) continue;
-		  
-		  const serviceData = serviceDoc.data();
-		  
-		  if (serviceData?.status === "PENDING") {
-			pendingCount++;
-		  }
-		  
-		  if (serviceId === routeData.waypoints[generatorWaypointIndex].serviceId) {
-			currentGenStatus = serviceDoc;
-			console.log(`Found current generator's service: ${serviceId}, status: ${serviceData.status}`);
-		  }
-		} catch (error) {
-		  console.error(`Error checking service status for ${serviceId}:`, error);
-		}
-	  }
-	  
-	  // If we couldn't find the status, get it directly
-	  if (!currentGenStatus) {
-		try {
-		  if (generatorData.id !== currentGenId) {
-			console.log(`Generator changed during direct status check (current: ${generatorData.id}, expected: ${currentGenId})`);
-			return;
-		  }
-		  
-		  const serviceId = routeData.waypoints[generatorWaypointIndex].serviceId;
-		  console.log(`Fetching current generator's service directly: ${serviceId}`);
-		  
-		  currentGenStatus = await getDoc(doc(db, COLLECTIONS.scheduledServices, serviceId));
-		  
-		  if (currentGenStatus && currentGenStatus.exists()) {
-			console.log(`Direct fetch result: status=${currentGenStatus.data().status}`);
-		  } else {
-			console.log(`Direct fetch: service document does not exist`);
-		  }
-		} catch (error) {
-		  console.error(`Error getting current generator status directly:`, error);
-		}
-	  }
-	  
-	  // Calculate progress percentage
-	  let progress = firstOccurrenceIndex > 0
-		? ((generatorWaypointIndex + 1 - pendingCount) / (generatorWaypointIndex + 1)) * 100
-		: 0;
-	  
-	  console.log(`Progress calculation: ${progress}%, pendingCount: ${pendingCount}`);
-	  
-	  // Set appropriate progress bar value
-	  let progressbarValue = progress;
-	  let shouldSetCompleted = false;
-	  
-	  // Determine progress based on service status
-	  if (currentGenStatus && currentGenStatus.exists()) {
-		const status = currentGenStatus.data().status;
-		
-		console.log(`Current generator service status: ${status}`);
-		
-		if (status === "COMPLETE") {
-		  shouldSetCompleted = true;
-		  progressbarValue = 100;
-		  console.log(`Service is COMPLETE, setting progress to 100%`);
-		} else if (status === "INPROGRESS" || pendingCount === 0) {
-		  progressbarValue = 90;
-		  console.log(`Service is INPROGRESS or no pending services, setting progress to 90%`);
-		} else {
-		  progressbarValue = progress === 100 ? 90 : progress;
-		  console.log(`Setting progress to ${progressbarValue}%`);
-		}
-	  }
-	  
-	  // CRITICAL: Determine the correct text for stops remaining
-	  let waypointsRemainingText = "Stops Remaining";
-	  
-	  if (currentGenStatus && currentGenStatus.exists()) {
-		const status = currentGenStatus.data().status;
-		
-		if (status === "INPROGRESS") {
-		  waypointsRemainingText = "Arriving Next";
-		  console.log("Service in progress, setting text to 'Arriving Next'");
-		} else if (status === "COMPLETE") {
-		  waypointsRemainingText = "Complete";
-		  console.log("Service complete, setting text to 'Complete'");
-		} else if (pendingCount === 0) {
-		  waypointsRemainingText = "Arriving Next";
-		  console.log("No pending services, setting text to 'Arriving Next'");
-		} else if (generatorWaypointIndex !== firstOccurrenceIndex) {
-		  waypointsRemainingText = "Arriving Next";
-		  console.log("Not first occurrence, setting text to 'Arriving Next'");
-		} else {
-		  waypointsRemainingText = "Stops Remaining";
-		  console.log("Setting text to 'Stops Remaining', pending count:", pendingCount);
-		}
-	  }
-	  
-	  // Update UI with the calculated values
-	  if (generatorData.id === currentGenId) {
-		console.log(`Updating UI with: progress=${progressbarValue}, stopsRemaining=${pendingCount}, waypointsRemaining='${waypointsRemainingText}'`);
-		
-		flushSync(() => {
-		  setProgressbar(progressbarValue);
-		  setStopsRemaining(pendingCount);
-		  setWaypointsRemaining(waypointsRemainingText);
-		});
-	  } else {
-		console.log(`Skipping UI updates - generator changed (current: ${generatorData.id}, expected: ${currentGenId})`);
-		return;
-	  }
-	  
-	  // Check if all waypoints for this generator are complete
-	  let allComplete = true;
-	  
-	  if (generatorWaypoints.length > 0) {
-		for (const waypoint of generatorWaypoints) {
-		  if (!waypoint.serviceId) continue;
-		  
-		  try {
-			if (generatorData.id !== currentGenId) {
-			  console.log(`Generator changed during waypoint completion check (current: ${generatorData.id}, expected: ${currentGenId})`);
-			  return;
-			}
-			
-			const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
-			
-			if (serviceDoc.exists()) {
-			  const status = serviceDoc.data().status;
-			  console.log(`Waypoint service ${waypoint.serviceId} status: ${status}`);
-			  
-			  if (status !== "COMPLETE") {
-				allComplete = false;
-				console.log(`Found non-complete service, setting allComplete to false`);
-				break;
-			  }
-			} else {
-			  allComplete = false;
-			  console.log(`Service document does not exist, setting allComplete to false`);
-			  break;
-			}
-		  } catch (error) {
-			console.error(`Error checking waypoint service status:`, error);
-			allComplete = false;
-			break;
-		  }
-		}
-	  } else {
-		allComplete = false;
-		console.log(`No waypoints found for this generator, setting allComplete to false`);
-	  }
-	  
-	  // Update completion status
-	  generatorCompletionStatusRef.current[currentGenId] = allComplete;
-	  console.log(`Setting completion status for generator ${currentGenId} to ${allComplete}`);
-	  
-	  if (generatorData.id === currentGenId) {
-		console.log(`Updating waypoint completion status for generator ${currentGenId} to ${allComplete}`);
-		flushSync(() => {
-		  setGeneratorWaypointCompleted(allComplete);
-		});
-	  }
-	  
-	  // If no waypoints found, calculate service stats separately
-	  if (generatorWaypoints.length === 0 && generatorData.id === currentGenId) {
-		console.log(`No waypoints found in route data, calculating service stats separately`);
-		await calculateServiceCompletionStats(currentGenId, timestampId, generatorRoutesForDay);
-	  }
-	  
-	} catch (error) {
-	  console.error(`Error processing route data for generator ${currentGenId}:`, error);
-	}
-  }
+			const date = new Date();
+			const todayUTC = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
+			const todayISOString = todayUTC.toISOString();
+			const routesQuery = query(collection(db, COLLECTIONS.routes));
+			const routesSnapshot = await getDocs(routesQuery);
+			const routes = routesSnapshot.docs.map((doc) => doc.id);
 
-  async function calculateServiceCompletionStats(generatorId, timestampId, generatorRoutesForDay) {
-	if (!generatorId) return { total: 0, completed: 0, allComplete: false };
-	
-	console.log(`Calculating service stats for generator ${generatorId}`);
-	console.log(`Current generator in state: ${generatorData.id}`);
-	
-	if (generatorData.id !== generatorId) {
-	  console.log(`Ignoring service stats for different generator (current: ${generatorData.id}, expected: ${generatorId})`);
-	  return { total: 0, completed: 0, allComplete: false };
-	}
-	
-	try {
-	  let totalServicesCount = 0;
-	  let completedServicesCount = 0;
-	  const todayStart = new Date(timestampId);
-	  const todayEnd = new Date(todayStart);
-	  todayEnd.setHours(23, 59, 59, 999);
-	  
-	  const todayStartTimestamp = Timestamp.fromDate(todayStart);
-	  const todayEndTimestamp = Timestamp.fromDate(todayEnd);
-	  const servicesQuery = query(
-		collection(db, COLLECTIONS.scheduledServices),
-		where("generatorId", "==", generatorId),
-		where("date", ">=", todayStartTimestamp),
-		where("date", "<=", todayEndTimestamp),
-		where("status", "not-in", [SERVICE_STATUS.CANCELLED, SERVICE_STATUS.DELETED])
-	  );
-	  
-	  const servicesSnapshot = await getDocs(servicesQuery);
-	  console.log(`Found ${servicesSnapshot.docs.length} services for generator ${generatorId}`);
-	  servicesSnapshot.docs.forEach(doc => {
-		console.log(`Service ${doc.id}: status=${doc.data().status}, generatorId=${doc.data().generatorId}`);
-	  });
-	  
-	  totalServicesCount = servicesSnapshot.docs.length;
-	  
-	  completedServicesCount = servicesSnapshot.docs.filter(
-		(doc) => doc.data().status === SERVICE_STATUS.COMPLETE
-	  ).length;
-	  
-	  console.log(`Generator ${generatorId}: ${completedServicesCount} of ${totalServicesCount} completed`);
-	  
-	  if (totalServicesCount === 0 && generatorRoutesForDay && generatorRoutesForDay.length > 0) {
-		console.log(`Checking route waypoints for generator ${generatorId}`);
-		
-		for (const routeId of generatorRoutesForDay) {
-		  if (!routeId) continue;
-		  
-		  if (generatorData.id !== generatorId) {
-			console.log(`Generator changed, cancelling stats calculation`);
-			return { total: 0, completed: 0, allComplete: false };
-		  }
-		  
-		  try {
-			const routeDocRef = doc(db, COLLECTIONS.routes, routeId);
-			const dailyRouteRef = doc(routeDocRef, "dailyRoutes", timestampId);
-			const dailyRouteData = await getDoc(dailyRouteRef);
-			
-			if (!dailyRouteData.exists()) continue;
-			
-			const routeWaypoints = dailyRouteData.data().waypoints || [];
-			
-			const generatorWaypoints = routeWaypoints.filter((wp) => wp.id === generatorId);
-			
-			console.log(`Route ${routeId}: Found ${generatorWaypoints.length} waypoints for generator ${generatorId}`);
-			
-			if (generatorWaypoints.length === 0) continue;
-			
-			totalServicesCount += generatorWaypoints.length;
-			
-			for (const waypoint of generatorWaypoints) {
-			  if (!waypoint.serviceId) continue;
-			   if (generatorData.id !== generatorId) {
-				console.log(`Generator changed, cancelling service status check`);
-				return { total: 0, completed: 0, allComplete: false };
-			  }
-			  
-			  try {
-				const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
-				
-				if (serviceDoc.exists()) {
-				  console.log(`Waypoint service ${waypoint.serviceId} status: ${serviceDoc.data().status}`);
-				  
-				  if (serviceDoc.data().status === SERVICE_STATUS.COMPLETE) {
-					completedServicesCount++;
-				  }
+			let hasAnyServices = false;
+
+			for (const routeId of routes) {
+				try {
+					const routeRef = doc(db, COLLECTIONS.routes, routeId);
+					const dailyRouteRef = doc(routeRef, "dailyRoutes", todayISOString);
+					const dailyRouteSnapshot = await getDoc(dailyRouteRef);
+
+					if (dailyRouteSnapshot.exists()) {
+						const dailyRouteData = dailyRouteSnapshot.data();
+						const waypoints = dailyRouteData.waypoints || [];
+						const generatorWaypoints = waypoints.filter((wp) => wp.id === generatorId);
+
+						if (generatorWaypoints.length > 0) {
+							hasAnyServices = true;
+							for (const waypoint of generatorWaypoints) {
+								if (!waypoint.serviceId) continue;
+
+								const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+
+								if (serviceDoc.exists()) {
+									const serviceData = serviceDoc.data();
+									const isMarkedAsClosed =
+										serviceData.markedAsClosedAt && serviceData.markedAsClosedAt.toDate instanceof Function;
+									if (
+										serviceData.status !== SERVICE_STATUS.COMPLETE &&
+										serviceData.status !== SERVICE_STATUS.CANCELLED &&
+										serviceData.status !== SERVICE_STATUS.DELETED &&
+										!isMarkedAsClosed
+									) {
+										console.log(
+											`Found incomplete service ${waypoint.serviceId} in route ${routeId}, status: ${serviceData.status}`
+										);
+										setGeneratorWaypointCompleted(false);
+										return false;
+									}
+								} else {
+									console.log(`Service ${waypoint.serviceId} does not exist in route ${routeId}`);
+									setGeneratorWaypointCompleted(false);
+									return false;
+								}
+							}
+						}
+					}
+				} catch (error) {
+					console.error(`Error checking route ${routeId}:`, error);
+					setGeneratorWaypointCompleted(false);
+					return false;
 				}
-			  } catch (error) {
-				console.error(`Error checking service status:`, error);
-			  }
 			}
-		  } catch (error) {
-			console.error(`Error getting daily route data:`, error);
-		  }
+
+			if (hasAnyServices) {
+				console.log(`All services for generator ${generatorId} across all routes are completed`);
+				setGeneratorWaypointCompleted(true);
+				return true;
+			}
+
+			console.log(`No services found for generator ${generatorId} across all routes`);
+			setGeneratorWaypointCompleted(false);
+			return false;
+		} catch (error) {
+			console.error("Error checking all routes:", error);
+			setGeneratorWaypointCompleted(false);
+			return false;
 		}
-	  }
-	  
-	  console.log(`Final counts: ${completedServicesCount} of ${totalServicesCount} completed`);
-	  
-	  const allComplete = totalServicesCount > 0 && completedServicesCount === totalServicesCount;
-	  
-	  generatorCompletionStatusRef.current[generatorId] = allComplete;
-	  
-	  if (generatorData.id === generatorId) {
-		console.log(`Setting completion status for generator ${generatorId} to ${allComplete}`);
-		
-		const completionText = `${completedServicesCount} of ${totalServicesCount} services completed`;
-		  flushSync(() => {
-		  setServiceCompletionText(completionText);
-		  setGeneratorWaypointCompleted(allComplete);
-		});
-	  } else {
-		console.log(`Skipping state updates - generator changed`);
-	  }
-	  
-	  return {
-		total: totalServicesCount,
-		completed: completedServicesCount,
-		allComplete,
-	  };
-	} catch (error) {
-	  console.error(`Error calculating service stats:`, error);
-	  return { total: 0, completed: 0, allComplete: false };
 	}
-  }
+
+	async function checkStopsRemaing(data) {
+		console.log("waypoint", data.routeData.waypoints);
+		const waypointData = data.routeData.waypoints;
+		let generatorWaypointIndex = -1;
+		let inProgressIndex = -1;
+		let firstOccurrenceIndex = -1;
+		const generatorWaypoints = waypointData.filter((wp) => wp.id === generatorData.id);
+
+		if (waypointData) {
+			const totalStops = waypointData.length;
+			for (let index = 0; index < totalStops; index++) {
+				const waypoint = waypointData[index];
+				if (waypoint.id === generatorData.id) {
+					if (firstOccurrenceIndex === -1) {
+						firstOccurrenceIndex = index;
+					}
+
+					try {
+						const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+
+						if (!serviceDoc.exists()) continue;
+
+						const serviceData = serviceDoc.data();
+						console.log(`Service ${waypoint.serviceId} status: ${serviceData.status}`);
+
+						if (serviceData.status === SERVICE_STATUS.INPROGRESS) {
+							inProgressIndex = index;
+							console.log(`Found INPROGRESS service at index ${index}`);
+						} else if (serviceData.status === SERVICE_STATUS.PENDING && generatorWaypointIndex === -1) {
+							generatorWaypointIndex = index;
+							console.log(`Found PENDING service at index ${index}`);
+						} else if (serviceData.status === SERVICE_STATUS.COMPLETE) {
+							console.log(`Found COMPLETE service at index ${index}`);
+						}
+					} catch (error) {
+						console.error(`Error getting service data for waypoint at index ${index}:`, error);
+					}
+				}
+			}
+
+			if (inProgressIndex !== -1) {
+				generatorWaypointIndex = inProgressIndex;
+			} else if (generatorWaypointIndex === -1) {
+				generatorWaypointIndex = firstOccurrenceIndex;
+			}
+
+			const serviceIds = waypointData
+				.slice(0, generatorWaypointIndex + 1)
+				.map((waypoint) => waypoint.serviceId)
+				.filter((id) => id);
+
+			let pendingCount = 0;
+			let currentGenStatus = null;
+
+			for (const serviceId of serviceIds) {
+				try {
+					const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, serviceId));
+
+					if (!serviceDoc.exists()) continue;
+
+					const serviceData = serviceDoc.data();
+
+					if (serviceData?.status === SERVICE_STATUS.PENDING) {
+						pendingCount++;
+					}
+
+					if (serviceId === waypointData[generatorWaypointIndex].serviceId) {
+						currentGenStatus = serviceDoc;
+						console.log(`Found current generator's service: ${serviceId}, status: ${serviceData.status}`);
+					}
+				} catch (error) {
+					console.error(`Error checking service status for ${serviceId}:`, error);
+				}
+			}
+
+			if (!currentGenStatus) {
+				try {
+					const serviceId = waypointData[generatorWaypointIndex].serviceId;
+					console.log(`Fetching current generator's service directly: ${serviceId}`);
+
+					currentGenStatus = await getDoc(doc(db, COLLECTIONS.scheduledServices, serviceId));
+				} catch (error) {
+					console.error(`Error getting current generator status directly:`, error);
+				}
+			}
+
+			let progress =
+				firstOccurrenceIndex > 0
+					? ((generatorWaypointIndex + 1 - pendingCount) / (generatorWaypointIndex + 1)) * 100
+					: 0;
+
+			let progressbarValue = progress;
+
+			if (currentGenStatus && currentGenStatus.exists()) {
+				const status = currentGenStatus.data().status;
+
+				console.log(`Current generator service status: ${status}`);
+
+				if (status === "COMPLETE") {
+					progressbarValue = 100;
+					console.log(`Service is COMPLETE, setting progress to 100%`);
+				} else if (status === SERVICE_STATUS.INPROGRESS || pendingCount === 0) {
+					progressbarValue = 90;
+					console.log(`Service is INPROGRESS or no pending services, setting progress to 90%`);
+				} else {
+					progressbarValue = progress === 100 ? 90 : progress;
+					console.log(`Setting progress to ${progressbarValue}%`);
+				}
+			}
+
+			let waypointsRemainingText = "Stops Remaining";
+
+			if (currentGenStatus && currentGenStatus.exists()) {
+				const status = currentGenStatus.data().status;
+
+				if (status !== SERVICE_STATUS.PENDING) {
+					waypointsRemainingText = "Arriving Next";
+					console.log("Service in progress, setting text to 'Arriving Next'");
+				}
+			}
+
+			setProgressbar(progressbarValue);
+			setStopsRemaining(pendingCount);
+			setWaypointsRemaining(waypointsRemainingText);
+		}
+
+		await checkTodayServicesCompletion(generatorData?.id, todayService);
+	}
 
 	useEffect(() => {
 		if (childrenData && childrenData.length > 0 && !generatorData.parentAccount) {
@@ -1118,36 +760,47 @@ async function performInitialServiceStatusCheck(genId) {
 
 	useEffect(() => {
 		if (!generatorData?.id) return;
-        const currentDate = new Date();  
-		const currentYear = currentDate.getFullYear();  
-		const startOfYear = new Date(Date.UTC(currentYear, 0, 1, 0, 0, 0, 0)); 
+		const currentDate = new Date();
+		const currentYear = currentDate.getFullYear();
+		const startOfYear = new Date(Date.UTC(currentYear, 0, 1, 0, 0, 0, 0));
 		const endOfYear = new Date(Date.UTC(currentYear, 11, 31, 23, 59, 59, 999));
 		const unsubscribe = onSnapshot(
 			query(
 				collection(db, COLLECTIONS.scheduledServices),
 				where("generatorId", "==", generatorData.id),
-				where("status", "not-in", ["DELETED", "CANCELLED"]),
+				where("status", "not-in", [SERVICE_STATUS.DELETED, SERVICE_STATUS.CANCELLED]),
 				where("date", ">=", Timestamp.fromDate(startOfYear)),
 				where("date", "<=", Timestamp.fromDate(endOfYear)),
 				orderBy("date", "asc")
 			),
 			async (snap) => {
 				try {
-					console.log("Snapshot received:", snap);
-					const tempServices = [];
+					let tempServices = [];
 					const jobs = snap.docs.map(async (el) => {
 						if (el.exists()) {
-							console.log("Document data:", el.data());
-							const serviceData = el.data();
-							const scheduleRes = await getDoc(doc(db, COLLECTIONS.serviceSchedules, serviceData.serviceScheduleId));
-							if (scheduleRes.exists()) {
-								serviceData.scheduleData = { ...scheduleRes.data(), id: scheduleRes.id };
+							const data = { ...el.data(), id: el.id };
+							if (data?.routeId?.length > 0) {
+								const routeRes = await getDoc(doc(db, COLLECTIONS.routes, data.routeId));
+								if (routeRes.exists()) {
+									data.routeData = { ...routeRes.data(), id: routeRes.id };
+								}
 							}
-							tempServices.push({ ...serviceData, id: el.id });
+							if (data?.serviceScheduleId?.length > 0) {
+								const serviceScheduleRes = await getDoc(doc(db, COLLECTIONS.serviceSchedules, data.serviceScheduleId));
+								if (serviceScheduleRes.exists()) {
+									data.serviceScheduleData = { ...serviceScheduleRes.data(), id: serviceScheduleRes.id };
+								}
+							}
+							tempServices.push(data);
 						}
 					});
 					await Promise.all(jobs);
-					console.log("tempService", tempServices);
+					tempServices = tempServices.sort((a, b) => a.date.toDate() - b.date.toDate());
+
+					// if (user.uid && generatorData?.transporterId != user.uid) {
+					// 	tempServices = tempServices.filter((service) => service.routeData.transporterId === user.uid);
+					// }
+
 					setAllServices(tempServices);
 				} catch (error) {
 					console.error("Error processing snapshot:", error);
@@ -1210,15 +863,49 @@ async function performInitialServiceStatusCheck(genId) {
 
 		return formatter.format(date);
 	}
+	async function getTransporterById(id) {
+		console.log("id for trans", id);
 
+		const tranRef = doc(db, "transporters", id);
+		const result = await getDoc(tranRef);
+
+		if (!result.exists()) {
+			throw new Error("Transporter not found.");
+		}
+
+		const data = result.data();
+		return data;
+	}
+
+	useEffect(() => {
+		if (!user?.transporterId) return;
+
+		let isMounted = true;
+
+		const fetchData = async () => {
+			try {
+				const tranData = await getTransporterById(user?.transporterId);
+				if (isMounted) {
+					setTransporterData(tranData);
+				}
+			} catch (error) {
+				console.error("Error fetching transporter data:", error);
+			}
+		};
+
+		fetchData();
+		return () => {
+			isMounted = false;
+		};
+	}, [user?.transporterId]);
 	if (authLoading || !user || !generatorData) {
 		return <Loader />;
 	}
 	const isParentWithChildren = !data?.parentAccount && childrenData && childrenData.length > 0;
 
 	return (
-		<div className="bg-bgDefaultColor px-32 py-5 flex flex-col gap-5 ">
-			<div className="grid grid-cols-3 gap-5 items-center ">
+		<div className="bg-bgDefaultColor px-6 md:px-12 lg:px-20 xl:px-32 py-3 md:py-5 flex flex-col gap-3 md:gap-5">
+			<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5 items-center">
 				<ParentDropdown
 					//  isParent={isparent}
 					generatorData={generatorData}
@@ -1248,8 +935,8 @@ async function performInitialServiceStatusCheck(genId) {
 					</span>
 				</button> */}
 				<div className="fixed top-4 right-8 z-50">
-                 <GeneratorUserAccBtn />
-                </div>
+					<GeneratorUserAccBtn />
+				</div>
 			</div>
 
 			<div className="bg-white w-full rounded-xl flex flex-col items-start justify-evenly p-5 shadow-sm">
@@ -1259,19 +946,18 @@ async function performInitialServiceStatusCheck(genId) {
 			</div>
 
 			<div className="flex justify-between gap-5">
-				<div className="bg-white p-10 flex items-center gap-5 flex-col w-full text-center rounded-xl shadow-md">
+				<div className="bg-white p-4 md:p-6 lg:p-8 flex items-center gap-3 md:gap-5 flex-col w-full text-center rounded-xl shadow-md">
 					<h1 className="font-bold text-3xl">Service</h1>
 
 					<div className="">
 						<h2 className="font-semibold text-lg">Next Service</h2>
 						<h1 className="text-[#4CD964] text-xl">
-						
-{nextService?.length > 0 && nextService[0]?.date
-  ? formatUtcDateString(nextService[0].date.toDate())
-  : "N/A"}
+							{nextService?.length > 0 && nextService[0]?.date
+								? formatUtcDateString(nextService[0].date.toDate())
+								: "N/A"}
 						</h1>
 					</div>
-
+                    {console.log("generator data from ui",generatorData)}
 					<div className="grid gap-2 w-full max-w-80">
 						<button
 							className="w-full  bg-thatblue hover:bg-blue-500 rounded-full text-white p-3"
@@ -1291,7 +977,7 @@ async function performInitialServiceStatusCheck(genId) {
 						</button>
 					</div>
 
-					<div className="w-full bg-thatblue text-white  rounded-xl p-5 grid  gap-2">
+					<div className="w-full bg-thatblue text-white rounded-xl p-3 md:p-5 grid gap-1 md:gap-2">
 						<h1 className="font-semibold text-center">Service Summary</h1>
 						<hr className="" />
 
@@ -1304,10 +990,9 @@ async function performInitialServiceStatusCheck(genId) {
 								<span className="text-left">Next Service:</span>
 
 								<span className="text-left">
-								
-{nextService?.length > 0 && nextService[0]?.date
-  ? formatUtcDateString(nextService[0].date.toDate())
-  : "N/A"}
+									{nextService?.length > 0 && nextService[0]?.date
+										? formatUtcDateString(nextService[0].date.toDate())
+										: "N/A"}
 								</span>
 							</div>
 							<div className="grid grid-cols-2">
@@ -1321,9 +1006,13 @@ async function performInitialServiceStatusCheck(genId) {
 							<div className="grid grid-cols-2">
 								<span className="text-left">Last Completed Service:</span>
 								<span className="text-left">
-									{lastCompleted?.[0]?.completedAt
-										? (lastCompleted[0].completedAt.toDate?.().toLocaleDateString() ?? new Date())
-										: "N/A"}
+									{lastCompleted?.[0]?.completedAt || lastCompleted?.[0]?.markedAsClosedAt
+										? formatDateString(
+												lastCompleted[0].completedAt?.toDate().toISOString() ||
+													lastCompleted[0]?.markedAsClosedAt?.toDate().toISOString(),
+												generatorData?.workingHours?.timeZone
+										  )
+										: "--"}
 								</span>
 							</div>
 							<div className="grid grid-cols-2">
@@ -1444,12 +1133,22 @@ async function performInitialServiceStatusCheck(genId) {
 					</div>
 				</div>
 				<div className="bg-white rounded-xl shadow-md flex flex-col gap-5 relative p-5 justify-center h-full">
-				{console.log("all datats",serviceCompletionText,completed,generatorWaypointCompleted,waypointsRemaining,routeStarted,progressBar,stopsRemaining)}
-				{console.log("date data",
-  todayService?.[0]?.date ? formatUtcDateString(todayService[0].date.toDate()) : null,
-  nextService?.[0]?.date ? formatUtcDateString(nextService[0].date.toDate()) : "not defined"
-)}
-				
+					{console.log(
+						"all datats",
+						serviceCompletionText,
+						completed,
+						generatorWaypointCompleted,
+						waypointsRemaining,
+						routeStarted,
+						progressBar,
+						stopsRemaining
+					)}
+					{console.log(
+						"date data",
+						todayService?.[0]?.date ? formatUtcDateString(todayService[0].date.toDate()) : null,
+						nextService?.[0]?.date ? formatUtcDateString(nextService[0].date.toDate()) : "not defined"
+					)}
+
 					<div className="absolute top-0 right-0 text-sm">
 						<p className="p-5">{serviceCompletionText}</p>
 					</div>
@@ -1457,9 +1156,9 @@ async function performInitialServiceStatusCheck(genId) {
 						<h2 className="text-lg font-bold text-left">Live Track</h2>
 					</div>
 					<div className="text-lg font-bold h-1/2 mt-auto flex items-end">
-						{
-nextService?.[0]?.date &&todayService?.[0]?.date&&						
-formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(nextService[0]?.date.toDate())
+						{nextService?.[0]?.date &&
+						todayService?.[0]?.date &&
+						formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(nextService[0]?.date.toDate())
 							? "Tracking "
 							: "Check Back On: "}
 						(
@@ -1472,11 +1171,11 @@ formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(next
 					<div className="h-1/2">
 						<div className="relative w-full bg-gray-200 rounded-full h-3 ">
 							<div
-								className={`${!completed ? "bg-blue-500" : "bg-green-500"} h-3 rounded-full`}
+								className={`${!generatorWaypointCompleted ? "bg-blue-500" : "bg-green-500"} h-3 rounded-full`}
 								style={{
 									width: generatorWaypointCompleted
 										? "100%"
-										: waypointsRemaining === "Arriving Next"
+										: waypointsRemaining === "Arriving Next" && routeStarted
 										? "90%"
 										: routeStarted
 										? `${progressBar}%`
@@ -1488,8 +1187,10 @@ formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(next
 								<div className="flex flex-col ">
 									<CheckCircleIcon
 										className={`w-7 h-7 ${
-											routeStarted || generatorWaypointCompleted
+											routeStarted
 												? "bg-blue-500 text-white"
+												: generatorWaypointCompleted
+												? "bg-green-500 text-white"
 												: "text-gray-300 bg-gray-200"
 										} rounded-full `}
 									/>
@@ -1503,25 +1204,21 @@ formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(next
 								<div className="flex flex-col items-center">
 									<div
 										className={`w-7 h-7 ${
-											routeStarted || generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"
+											routeStarted ? "bg-blue-500" : generatorWaypointCompleted ? "bg-green-500 " : "bg-gray-200"
 										} rounded-full flex items-center justify-center text-white`}
 									>
 										{routeStarted && waypointsRemaining !== "Arriving Next" && !generatorWaypointCompleted && (
 											<p>{stopsRemaining}</p>
 										)}
 									</div>
-									<span
-										className={`${
-											routeStarted || waypointsRemaining == "Arriving Next" ? "text-blue-500" : "text-gray-700"
-										}`}
-									>
-										{waypointsRemaining}
+									<span className={`${routeStarted || generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}`}>
+										{routeStarted ? waypointsRemaining : "Stops Remaining"}
 									</span>
 								</div>
 								{/* Service Completed Icon */}
 								<div className="flex flex-col items-end ">
 									<div
-										className={`w-7 h-7 ${generatorWaypointCompleted ? "bg-blue-500" : "bg-gray-200"} rounded-full`}
+										className={`w-7 h-7 ${generatorWaypointCompleted ? "bg-green-500" : "bg-gray-200"} rounded-full`}
 									></div>
 									<span className={`${generatorWaypointCompleted ? "text-blue-500" : "text-gray-700"}`}>
 										Service Completed
@@ -1533,7 +1230,7 @@ formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(next
 				</div>
 			</div>
 
-			<div className="w-full grid grid-cols-2 gap-5">
+			<div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-5">
 				<div className="bg-white p-3 rounded-cardRadii shadow-md flex-1 flex flex-col">
 					<h2 className="font-bold text-lg ml-1 pb-2">Service Calendar</h2>
 					<CalendarWithTimeSlots allServices={allServices} wholeCalender={true} />
@@ -1553,14 +1250,17 @@ formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(next
 						generatorData?.serviceAddCoordinates?.lng &&
 						randomCoordinates?.lat &&
 						randomCoordinates?.lng ? (
-							<CustomAzureGeneratorDashboardMap generatorData={generatorData} randomCoordinates={randomCoordinates} />
+							<CustomAzureGeneratorDashboardMap
+								generatorData={generatorData}
+								randomCoordinates={randomCoordinates}
+								showPointer={true}
+							/>
 						) : (
 							<p>Generator Data not flow</p>
 						)}
 					</AzureMapsProvider>
 				</div>
 			</div>
-
 			<GeneratorDetailsForm
 				billingAddress={generatorData.billingAddress}
 				serviceAddress={generatorData.serviceAddress}
@@ -1569,9 +1269,10 @@ formatUtcDateString(todayService[0]?.date.toDate()) === formatUtcDateString(next
 					contactFormRef.current.scrollIntoView({ behavior: "smooth" });
 				}}
 			/>
-			<GeneratorOfficeHours workingHours={generatorData.workingHours} />
+
+			<GeneratorOfficeHours workingHours={generatorData?.workingHours} />
 			<div ref={contactFormRef}>
-				<ContactUsForm />
+				<ContactUsForm transporterData={transporterData} />
 			</div>
 		</div>
 	);
