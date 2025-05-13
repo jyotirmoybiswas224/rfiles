@@ -270,9 +270,8 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 					await Promise.all(jobs);
 					tempServices = tempServices.sort((a, b) => a.date.toDate() - b.date.toDate());
 
-					
-					if (user.uid&&generatorData?.transporterId!=user.uid) {
-						tempServices = tempServices.filter(service => service.routeData.transporterId === user.uid);
+					if (user.uid && generatorData?.transporterId != user.uid) {
+						tempServices = tempServices.filter((service) => service.routeData.transporterId === user.uid);
 					}
 
 					setAllServices(tempServices);
@@ -427,8 +426,8 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 						const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
 						console.log("todayUTC", todayUTC);
 
-						if (user.uid&&generatorData?.transporterId!=user.uid) {
-							tempServices = tempServices.filter(service => service.routeData.transporterId === user.uid);
+						if (user.uid && generatorData?.transporterId != user.uid) {
+							tempServices = tempServices.filter((service) => service.routeData.transporterId === user.uid);
 						}
 						setNextService(
 							tempServices
@@ -436,7 +435,8 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 									const isMarkedAsClosed = el.markedAsClosedAt && el.markedAsClosedAt.toDate instanceof Function;
 									if (
 										el.date.toDate().getTime() >= todayUTC.getTime() &&
-										el.status !== SERVICE_STATUS.COMPLETE&&!isMarkedAsClosed
+										el.status !== SERVICE_STATUS.COMPLETE &&
+										!isMarkedAsClosed
 									) {
 										return true;
 									} else {
@@ -446,33 +446,33 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 								.sort((a, b) => a.date.toDate() - b.date.toDate())
 						);
 						const lastComplet = tempServices
-						.filter((el) => {
-							const isCompleted = el.date.toDate() <= todayUTC && el.status === SERVICE_STATUS.COMPLETE;
-							
-							const isMarkedAsClosed = el.markedAsClosedAt && el.markedAsClosedAt.toDate instanceof Function;
-							return isCompleted || isMarkedAsClosed;
-						})
-						.sort((a, b) => {
-							let aEffectiveDate;
-							if (a.markedAsClosedAt && a.markedAsClosedAt.toDate instanceof Function) {
-								aEffectiveDate = a.markedAsClosedAt.toDate();
-							} else if (a.completedAt?.toDate() && a.completedAt.toDate() > a.date.toDate()) {
-								aEffectiveDate = a.completedAt.toDate();
-							} else {
-								aEffectiveDate = a.date.toDate();
-							}
-							let bEffectiveDate;
-							if (b.markedAsClosedAt && b.markedAsClosedAt.toDate instanceof Function) {
-								bEffectiveDate = b.markedAsClosedAt.toDate();
-							} else if (b.completedAt?.toDate() && b.completedAt.toDate() > b.date.toDate()) {
-								bEffectiveDate = b.completedAt.toDate();
-							} else {
-								bEffectiveDate = b.date.toDate();
-							}
-							return bEffectiveDate - aEffectiveDate;
-						});
-					
-					setLastCompleted(lastComplet);
+							.filter((el) => {
+								const isCompleted = el.date.toDate() <= todayUTC && el.status === SERVICE_STATUS.COMPLETE;
+
+								const isMarkedAsClosed = el.markedAsClosedAt && el.markedAsClosedAt.toDate instanceof Function;
+								return isCompleted || isMarkedAsClosed;
+							})
+							.sort((a, b) => {
+								let aEffectiveDate;
+								if (a.markedAsClosedAt && a.markedAsClosedAt.toDate instanceof Function) {
+									aEffectiveDate = a.markedAsClosedAt.toDate();
+								} else if (a.completedAt?.toDate() && a.completedAt.toDate() > a.date.toDate()) {
+									aEffectiveDate = a.completedAt.toDate();
+								} else {
+									aEffectiveDate = a.date.toDate();
+								}
+								let bEffectiveDate;
+								if (b.markedAsClosedAt && b.markedAsClosedAt.toDate instanceof Function) {
+									bEffectiveDate = b.markedAsClosedAt.toDate();
+								} else if (b.completedAt?.toDate() && b.completedAt.toDate() > b.date.toDate()) {
+									bEffectiveDate = b.completedAt.toDate();
+								} else {
+									bEffectiveDate = b.date.toDate();
+								}
+								return bEffectiveDate - aEffectiveDate;
+							});
+						console.log("lastComplete");
+						setLastCompleted(lastComplet);
 
 						const todayServices = tempServices
 							.filter((el) => {
@@ -525,12 +525,8 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 		const totalService = tservice.length;
 		const completedServices = tservice.filter((service) => {
 			const isMarkedAsClosed = service.markedAsClosedAt && service.markedAsClosedAt.toDate instanceof Function;
-			if(service.status === SERVICE_STATUS.COMPLETE||isMarkedAsClosed){
-				return true
-			}else{
-				return false
-			}
-	        }).length;
+			return service.status === SERVICE_STATUS.COMPLETE || isMarkedAsClosed;
+		}).length;
 		const completionText = `${completedServices} of ${totalService} services completed`;
 		let routeIsStarted = false;
 		let selectedServiceObj = null;
@@ -553,7 +549,10 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 					if (routeData.assignedDriverId && routeData.assignedServiceVehicleId) {
 						const routeServices = tservice.filter((s) => s.routeId === routeId);
 						const inProgressService = routeServices.find(
-							(s) => s.status === SERVICE_STATUS.INPROGRESS && s.status !== SERVICE_STATUS.CANCELLED && s.status !== SERVICE_STATUS.DELETED
+							(s) =>
+								s.status === SERVICE_STATUS.INPROGRESS &&
+								s.status !== SERVICE_STATUS.CANCELLED &&
+								s.status !== SERVICE_STATUS.DELETED
 						);
 
 						if (inProgressService) {
@@ -563,7 +562,10 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 						}
 
 						const pendingService = routeServices.find(
-							(s) => s.status === SERVICE_STATUS.PENDING && s.status !== SERVICE_STATUS.CANCELLED && s.status !== SERVICE_STATUS.DELETED
+							(s) =>
+								s.status === SERVICE_STATUS.PENDING &&
+								s.status !== SERVICE_STATUS.CANCELLED &&
+								s.status !== SERVICE_STATUS.DELETED
 						);
 
 						if (pendingService) {
@@ -592,24 +594,24 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 		if (!generatorId) return false;
 
 		try {
-			const incompleteDirectServices = todayServices.filter(
-				(service) =>{
-					const isMarkedAsClosed = service.markedAsClosedAt && service.markedAsClosedAt.toDate instanceof Function;
-
+			const incompleteDirectServices = todayServices.filter((service) => {
+				const isMarkedAsClosed = service.markedAsClosedAt && service.markedAsClosedAt.toDate instanceof Function;
+				return (
 					service.status !== SERVICE_STATUS.COMPLETE &&
 					service.status !== SERVICE_STATUS.CANCELLED &&
-					service.status !== SERVICE_STATUS.DELETED&&!isMarkedAsClosed
-		});
+					service.status !== SERVICE_STATUS.DELETED &&
+					!isMarkedAsClosed
+				);
+			});
 
 			if (incompleteDirectServices.length > 0) {
-				console.log("Found incomplete direct services:", incompleteDirectServices.length);
+				console.log("Incomplete services detected:", incompleteDirectServices);
 				setGeneratorWaypointCompleted(false);
 				return false;
 			}
 
 			const today = new Date();
 			const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
-
 			const routeIds = [...new Set(todayServices.map((s) => s.routeId))].filter(Boolean);
 
 			for (const routeId of routeIds) {
@@ -627,52 +629,47 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 							if (!waypoint.serviceId) continue;
 							const existingService = todayServices.find((s) => s.id === waypoint.serviceId);
 
-							if (existingService) {
-								continue;
-							}
-							const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+							if (!existingService) {
+								const serviceDoc = await getDoc(doc(db, COLLECTIONS.scheduledServices, waypoint.serviceId));
+								if (serviceDoc.exists()) {
+									const serviceData = serviceDoc.data();
+									const serviceDate = serviceData.date.toDate();
+									const isToday =
+										serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
+										serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
+										serviceDate.getUTCDate() === todayUTC.getUTCDate();
+									const isMarkedAsClosed =
+										serviceData.markedAsClosedAt && serviceData.markedAsClosedAt.toDate instanceof Function;
 
-							if (serviceDoc.exists()) {
-								const serviceData = serviceDoc.data();
-								const serviceDate = serviceData.date.toDate();
-								const isToday =
-									serviceDate.getUTCFullYear() === todayUTC.getUTCFullYear() &&
-									serviceDate.getUTCMonth() === todayUTC.getUTCMonth() &&
-									serviceDate.getUTCDate() === todayUTC.getUTCDate();
-									const isMarkedAsClosed = serviceData.markedAsClosedAt && serviceData.markedAsClosedAt.toDate instanceof Function;
-								if (
-									isToday &&
-									serviceData.status !== SERVICE_STATUS.COMPLETE &&
-									serviceData.status !== SERVICE_STATUS.CANCELLED &&
-									serviceData.status !== SERVICE_STATUS.DELETED&&!isMarkedAsClosed
-								) {
-									console.log(
-										`Found incomplete service in waypoint: ${waypoint.serviceId}, status: ${serviceData.status}`
-									);
-									setGeneratorWaypointCompleted(false);
-									return false;
+									if (
+										isToday &&
+										serviceData.status !== SERVICE_STATUS.COMPLETE &&
+										serviceData.status !== SERVICE_STATUS.CANCELLED &&
+										serviceData.status !== SERVICE_STATUS.DELETED &&
+										!isMarkedAsClosed
+									) {
+										console.log(
+											`Incomplete service found in waypoint: ${waypoint.serviceId}, status: ${serviceData.status}`
+										);
+										setGeneratorWaypointCompleted(false);
+										return false;
+									}
 								}
 							}
 						}
 					}
 				} catch (error) {
-					console.error(`Error checking route waypoints for ${routeId}:`, error);
+					console.error(`Error checking waypoints for route ${routeId}:`, error);
 					setGeneratorWaypointCompleted(false);
 					return false;
 				}
 			}
 
-			const isCompleted = todayServices.length > 0;
-
-			console.log(`All services for generator ${generatorId} on ${todayUTC.toISOString()} are completed:`, {
-				directServices: todayServices.length,
-				isCompleted,
-			});
-
-			setGeneratorWaypointCompleted(isCompleted);
-			return isCompleted;
+			console.log(`All services for generator ${generatorId} are completed.`);
+			setGeneratorWaypointCompleted(true);
+			return true;
 		} catch (error) {
-			console.error("Error checking service completion:", error);
+			console.error("Error in checkTodayServicesCompletion:", error);
 			setGeneratorWaypointCompleted(false);
 			return false;
 		}
@@ -709,11 +706,13 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 
 								if (serviceDoc.exists()) {
 									const serviceData = serviceDoc.data();
-									const isMarkedAsClosed = serviceData.markedAsClosedAt && serviceData.markedAsClosedAt.toDate instanceof Function;
+									const isMarkedAsClosed =
+										serviceData.markedAsClosedAt && serviceData.markedAsClosedAt.toDate instanceof Function;
 									if (
 										serviceData.status !== SERVICE_STATUS.COMPLETE &&
 										serviceData.status !== SERVICE_STATUS.CANCELLED &&
-										serviceData.status !== SERVICE_STATUS.DELETED&&!isMarkedAsClosed
+										serviceData.status !== SERVICE_STATUS.DELETED &&
+										!isMarkedAsClosed
 									) {
 										console.log(
 											`Found incomplete service ${waypoint.serviceId} in route ${routeId}, status: ${serviceData.status}`
@@ -988,20 +987,20 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 				<div className="flex flex-col justify-between items-end h-full gap-5">
 					<div className="flex items-center gap-2">
 						<h6 className="font-semibold text-end text-2xl text-nowrap">
-						{generatorData?.subContractors?.length > 0 ? (
-							<>
-								<span>
-									{generatorData.subContractors[0].id === user?.uid
-										? generatorData.subContractors[0].name
-										: generatorData.subContractors[0].subContractorName}
-								</span>
-								{generatorData.subContractors.length > 1 && (
-									<span className="ml-1 text-gray-500">+{generatorData.subContractors.length - 1} more</span>
-								)}
-							</>
-						) : (
-							""
-						)}
+							{generatorData?.subContractors?.length > 0 ? (
+								<>
+									<span>
+										{generatorData.subContractors[0].id === user?.uid
+											? generatorData.subContractors[0].name
+											: generatorData.subContractors[0].subContractorName}
+									</span>
+									{generatorData.subContractors.length > 1 && (
+										<span className="ml-1 text-gray-500">+{generatorData.subContractors.length - 1} more</span>
+									)}
+								</>
+							) : (
+								""
+							)}
 						</h6>
 						{generatorData.isSubContracted && (
 							<div
@@ -1091,9 +1090,10 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 							<div className="grid grid-cols-2">
 								<span className="text-left">Last Completed Service:</span>
 								<span className="text-left">
-									{lastCompleted?.[0]?.completedAt
+									{lastCompleted?.[0]?.completedAt || lastCompleted?.[0]?.markedAsClosedAt
 										? formatDateString(
-												lastCompleted[0].completedAt.toDate().toISOString(),
+												lastCompleted[0].completedAt?.toDate().toISOString() ||
+													lastCompleted[0]?.markedAsClosedAt?.toDate().toISOString(),
 												generatorData?.workingHours?.timeZone
 										  )
 										: "--"}
@@ -1178,6 +1178,50 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 				</div>
 			</div>
 
+			<div className="bg-white rounded-xl shadow-md p-5 w-full">
+				<div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+					{/* Generator Notes */}
+					<div
+						className="border border-gray-200 rounded-lg p-4 bg-gray-50 hover:cursor-pointer"
+						onClick={() => {
+							navigate(`/admin/generators/${generatorData?.id}/generator-profile`);
+						}}
+					>
+						<h3 className="text-md font-semibold text-gray-700 mb-2">Generator Notes:</h3>
+						<p className="text-gray-600 whitespace-pre-wrap">
+							{generatorData?.generatorNote || "No generator notes available."}
+						</p>
+					</div>
+
+					{/* Billing Notes */}
+					<div
+						className="border border-gray-200 rounded-lg p-4 bg-gray-50 hover:cursor-pointer"
+						onClick={() => {
+							navigate(`/admin/generators/${generatorData?.id}/generator-billing`);
+						}}
+					>
+						<h3 className="text-md font-semibold text-gray-700 mb-2">Billing Notes:</h3>
+
+						<p className="text-gray-600 whitespace-pre-wrap">
+							{generatorData?.internalBillingNote || "No billing notes available."}
+						</p>
+					</div>
+
+					{/* Service Notes */}
+					<div
+						className="border border-gray-200 rounded-lg p-4 bg-gray-50 hover:cursor-pointer"
+						onClick={() => {
+							navigate(`/admin/generators/${generatorData?.id}/routes`);
+						}}
+					>
+						<h3 className="text-md font-semibold text-gray-700 mb-2">Service Notes:</h3>
+						<p className="text-gray-600 whitespace-pre-wrap">
+							{generatorData?.serviceInstructions || "No service notes available."}
+						</p>
+					</div>
+				</div>
+			</div>
+
 			<div className="w-full grid grid-cols-2 gap-5 ">
 				<div className="bg-white rounded-cardRadii shadow-md p-5 grid grid-cols-1 gap-2">
 					<h2 className="text-lg font-bold text-left">Upcoming Service Schedules</h2>
@@ -1224,7 +1268,8 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 						waypointsRemaining,
 						routeStarted,
 						progressBar,
-						stopsRemaining
+						stopsRemaining,
+						lastCompleted
 					)}
 					{console.log(
 						"date data",
@@ -1339,7 +1384,11 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 						generatorData?.serviceAddCoordinates?.lng &&
 						randomCoordinates?.lat &&
 						randomCoordinates?.lng ? (
-							<CustomAzureGeneratorDashboardMap generatorData={generatorData} randomCoordinates={randomCoordinates} />
+							<CustomAzureGeneratorDashboardMap
+								generatorData={generatorData}
+								randomCoordinates={randomCoordinates}
+								showPointer={generatorData?.transporterId == user?.uid}
+							/>
 						) : (
 							<p>Generator Data not flow</p>
 						)}
