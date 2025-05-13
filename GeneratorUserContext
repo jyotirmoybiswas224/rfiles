@@ -1,0 +1,192 @@
+import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import PropTypes from "prop-types";
+import { createContext, useState, useContext, useEffect } from "react";
+import { COLLECTIONS, db } from "../config/firebase";
+import { showErrorToastMessage, showInternalServerErrorToastMessage, showSuccessToastMessage } from "../utils/helpers";
+
+const GeneratorUserContext = createContext({
+	user: null,
+	authLoading: true,
+	generatorData: null,
+	allServices: [],
+	login: () => {},
+	logout: () => {},
+});
+const GENERATOR_USER = "GENERATOR_USER";
+export const GeneratorUserProvider = ({ children }) => {
+	const [user, setUser] = useState(null);
+	const [authLoading, setAuthLoading] = useState(true);
+	const [generatorData, setGeneratorData] = useState(null);
+	const [allServices, setAllServices] = useState([]);
+
+	const checkForUser = async (tempUser) => {
+		try {
+		  let userDocRef = doc(db, COLLECTIONS.generatorContacts, tempUser.contactId);
+		  let docData = await getDoc(userDocRef);
+		  
+		  console.log({ exists: docData.exists(), docData: docData?.data() });
+		  
+		  if (docData.exists()) {
+			let data = docData.data();
+			console.log({ data });
+			
+			// Set the user first
+			setUser({ contactId: docData.id, ...data });
+			
+			// Then immediately try to load generator data if possible
+			if (data.generatorId) {
+			  const generatorDoc = await getDoc(doc(db, COLLECTIONS.generators, data.generatorId));
+			  if (generatorDoc.exists()) {
+				const generatorData = { ...generatorDoc.data(), id: generatorDoc.id };
+				setGeneratorData(generatorData);
+				localStorage.setItem('GENERATOR_DATA', JSON.stringify(generatorData));
+			  }
+			}
+		  } else {
+			// User document doesn't exist, clear localStorage
+			localStorage.removeItem(GENERATOR_USER);
+			localStorage.removeItem('GENERATOR_DATA');
+		  }
+		} catch (error) {
+		  console.error("Error checking user:", error);
+		}
+	  };
+
+	useEffect(() => {
+		const tempUserJson = localStorage.getItem(GENERATOR_USER);
+		const tempUser = JSON.parse(tempUserJson);
+		if (tempUser) {
+			console.log({ tempUser });
+			if (tempUser.contactId) checkForUser(tempUser);
+		} 
+	}, []);
+
+	console.log({ user });
+
+	useEffect(() => {
+		if (user && generatorData) {
+			setAuthLoading(false);
+		}
+	}, [authLoading, user, generatorData]);
+
+	useEffect(() => {
+		if (user && user.generatorId) {
+		  console.log("Fetching generator data for:", user.generatorId);
+		  
+		  const unsubscribe = onSnapshot(doc(db, COLLECTIONS.generators, user.generatorId), (snap) => {
+			if (snap.exists()) {
+			  console.log("Generator data received:", snap.data());
+			  const generatorData = { ...snap.data(), id: snap.id };
+			  setGeneratorData(generatorData);
+			  
+			  // Save to localStorage for persistence across reloads
+			  localStorage.setItem('GENERATOR_DATA', JSON.stringify(generatorData));
+			} else {
+			  console.error("Generator document does not exist for ID:", user.generatorId);
+			}
+		  });
+		  
+		  return () => {
+			console.log("Unsubscribing from generator data listener");
+			unsubscribe();
+		  };
+		} else {
+		  // Try to load from localStorage if user is authenticated but data not loaded yet
+		  if (user && !generatorData) {
+			const savedData = localStorage.getItem('GENERATOR_DATA');
+			if (savedData) {
+			  try {
+				setGeneratorData(JSON.parse(savedData));
+				console.log("Loaded generator data from localStorage");
+			  } catch (error) {
+				console.error("Error parsing saved generator data:", error);
+			  }
+			}
+		  }
+		}
+	  }, [user]);
+
+	useEffect(() => {
+		if (!generatorData) return;
+		const unsubscribe = onSnapshot(
+			query(
+				collection(db, COLLECTIONS.scheduledServices),
+				where("generatorId", "==", generatorData.id),
+				where("status", "!=", "DELETED"),
+				orderBy("date", "asc")
+			),
+			async (snap) => {
+				const tempServices = [];
+				const jobs = snap.docs.map(async (el) => {
+					if (el.exists()) {
+						const serviceData = el.data();
+						const scheduleRes = await getDoc(doc(db, COLLECTIONS.serviceSchedules, serviceData.serviceScheduleId));
+						if (scheduleRes.exists()) {
+							serviceData.scheduleData = { ...scheduleRes.data(), id: scheduleRes.id };
+						}
+						tempServices.push({ ...serviceData, id: el.id });
+					}
+				});
+				await Promise.all(jobs);
+				setAllServices(tempServices);
+			}
+		);
+
+		return () => {
+			if (unsubscribe) unsubscribe();
+		};
+	}, [generatorData]);
+
+	const login = async (email, password, transporterId) => {
+		try {
+			setAuthLoading(true);
+			const res = await getDocs(
+				query(
+					collection(db, COLLECTIONS.generatorContacts),
+					where("transporterId", "==", transporterId),
+					where("emailAdd", "==", email)
+				)
+			);
+			if (!res.docs.length || !res.docs[0].exists()) {
+				showErrorToastMessage("Invalid Email or Password");
+				return;
+			}
+			const data = res.docs[0].data();
+
+			if (data.password !== password) {
+				showErrorToastMessage("Invalid Email or Password");
+				return;
+			}
+
+			console.log("====================================");
+			console.log({ data });
+			console.log("====================================");
+
+			setUser({ contactId: res.docs[0]?.id, ...data });
+			localStorage.setItem(GENERATOR_USER, JSON.stringify({ contactId: res.docs[0]?.id, ...data }));
+			showSuccessToastMessage("Login Successful...");
+		} catch (error) {
+			console.log({ error });
+			showInternalServerErrorToastMessage();
+		} finally {
+			setAuthLoading(false);
+		}
+	};
+	const logout = () => {
+		setUser(null);
+		localStorage.removeItem(GENERATOR_USER);
+	};
+	return (
+		<GeneratorUserContext.Provider value={{ login, logout, user, authLoading, generatorData, allServices, setUser }}>
+			{children}
+		</GeneratorUserContext.Provider>
+	);
+};
+
+GeneratorUserProvider.propTypes = {
+	children: PropTypes.node,
+};
+
+export const useGeneratorUser = () => {
+	return useContext(GeneratorUserContext);
+};
