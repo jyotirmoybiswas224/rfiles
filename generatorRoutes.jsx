@@ -163,8 +163,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const [subContractorData, setSubContractorData] = useState([]);
 	const [isOctoMarketUser, setIsOctoMarketUser] = useState(false);
 	const [currentServiceSchedules, setCurrentServiceSchedules] = useState([]);
-	const [isAutoSaving, setIsAutoSaving] = useState(false);
-	const [hasChanges, setHasChanges] = useState(false);
 	const [sentSubcontractorRequests, setSentSubcontractorRequests] = useState([]);
 	const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
 	const [activeSentSSRs, setActiveSentSSRs] = useState([]);
@@ -198,59 +196,17 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		}
 	}, [user, generatorData]);
 
-	const instructionsSectionRef = useRef(null);
-	const saveInstructions = async () => {
-		if (!generatorData || !hasChanges) return;
+	const autoSaveInstructions = async (data) => {
+		if (!generatorData) return;
 
-		try {
-			const formData = watchInstructions();
-			const hasRealChanges = Object.keys(formData).some((key) => {
-				return formData[key] !== prevInstructions[key];
-			});
-
-			if (!hasRealChanges) {
-				setHasChanges(false);
-				return;
-			}
-
-			setIsAutoSaving(true);
-			await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), formData);
-			setPrevInstructions(formData);
-			setHasChanges(false);
-			showSuccessToastMessage("Service Instructions saved automatically");
-		} catch (error) {
-			console.log(error);
-			showInternalServerErrorToastMessage();
-		} finally {
-			setIsAutoSaving(false);
-		}
-	};
-
-	useEffect(() => {
-		const form = instructionsSectionRef.current;
-		if (!form) return;
-
-		const handleMouseLeave = () => {
-			if (hasChanges) {
-				saveInstructions();
-			}
-		};
-
-		form.addEventListener("mouseleave", handleMouseLeave);
-
-		return () => {
-			form.removeEventListener("mouseleave", handleMouseLeave);
-		};
-	}, [hasChanges, instructionsSectionRef.current]);
-
-	useEffect(() => {
-		const formData = watchInstructions();
-		const hasRealChanges = Object.keys(formData).some((key) => {
-			return formData[key] !== prevInstructions[key];
+		const hasRealChanges = Object.keys(data).some((key) => {
+			return data[key] !== prevInstructions[key];
 		});
-
-		setHasChanges(hasRealChanges);
-	}, [watchInstructions(), prevInstructions]);
+		if (!hasRealChanges) return;
+		await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
+		setPrevInstructions((prev) => ({ ...prev, ...data }));
+		showSuccessToastMessage("Service Instructions saved automatically");
+	};
 
 	useEffect(() => {
 		if (genId) updateGeneratorData();
@@ -625,6 +581,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	useEffect(() => {
 		if (!user || !user?.uid) return;
+		if (!generatorData) return;
 		let unsubscribe = onSnapshot(
 			query(collection(db, COLLECTIONS.generators), where("transporterId", "==", user?.uid)),
 			(snap) => {
@@ -646,13 +603,25 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						});
 					}
 				});
+				const alreadyExist = tempGeneratorData.find((el) => el.id === generatorData?.id);
+
+				if (!alreadyExist) {
+					tempGeneratorData.push({
+						...generatorData,
+						id: generatorData.id,
+						randomCoordinates: randomizeCoordinates(
+							generatorData.serviceAddCoordinates.lat,
+							generatorData.serviceAddCoordinates.lng
+						),
+					});
+				}
 				setAllGeneratorsData(tempGeneratorData);
 			}
 		);
 		return () => {
 			if (unsubscribe) unsubscribe();
 		};
-	}, [user]);
+	}, [user, generatorData]);
 	useEffect(() => {
 		if (!user || !user?.uid) return;
 		let unsubscribe = getAllTreatmentsLocationSnapshot(setAllTreatmentData, user?.uid);
@@ -1104,11 +1073,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	};
 
 	const renderSSRForm = (isReadOnly, ssrData) => {
-		console.log("ssr data", ssrData);
 		const getFormData = () => {
-			console.log("ssr data", ssrData);
-			// Add this to the renderSSRForm function in your component
-
 			if (isReadOnly && ssrData) {
 				const isReceived = ssrData.subcontractorId === user?.uid;
 				return {
@@ -1126,6 +1091,8 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					expectedItemOrService: ssrData.expectedItemsOrServices || [],
 					serviceNote: ssrData.serviceNote || "",
 					isReceivedSSR: isReceived,
+					serviceStatus: ssrData.status,
+					cancelNote: ssrData.cancelReason,
 				};
 			} else {
 				return {
@@ -1161,7 +1128,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				const option = serviceDurationOptions.find((opt) => opt.value === value);
 				return option ? option.label : value;
 			};
-			console.log("rcived ssr", formData, ssrData);
 
 			return (
 				<div className="pb-4">
@@ -1382,6 +1348,26 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 							label="Service Note To Subcontractor"
 							isDisabled={isReadOnly}
 						/>
+						{isReadOnly && (
+							<div>
+								<div className="flex gap-40">
+									<div className=" text-cardTextGray">Service Status :</div>
+									<div className="text-md mb-1">{capitalizeFirstLetter(formData.serviceStatus)}</div>
+								</div>
+								{formData.serviceStatus == SERVICE_STATUS.DECLINED && (
+									<Textarea
+										value={capitalizeFirstLetter(formData.cancelNote)}
+										onChange={(e) => {
+											if (!isReadOnly) {
+												setValue("cancelNote", e.target.value);
+											}
+										}}
+										label="Decline Reason:"
+										isDisabled={isReadOnly}
+									/>
+								)}
+							</div>
+						)}
 					</div>
 
 					<div className="w-1/2 space-y-4">
@@ -1553,7 +1539,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		const dayNo = date.getDay();
 		const dayName = daysOfWeek[dayNo];
 		if (!generatorData) return "N/A";
-		const operatingHours = generatorData.workingHours[dayName];
+		const operatingHours = generatorData?.workingHours?.[dayName];
 
 		if (operatingHours?.closed) {
 			return "Closed";
@@ -1571,23 +1557,24 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			date = new Date(date);
 		} else {
 			console.log("String Not Found");
+			return <p>N/A</p>; // Return early if date is not valid
 		}
 
 		const currentDate = new Date(date);
-
 		const dateUTC = new Date(date);
-
 		const dayNo = dateUTC.getDay();
-
 		const dayName = daysOfWeek[dayNo];
 
-		if (!generatorData) return <p>N/A</p>;
+		if (!generatorData || !generatorData.workingHours || !generatorData.workingHours[dayName]) {
+			return <p>N/A</p>;
+		}
 
-		const operatingHours = generatorData?.workingHours[dayName] ?? null;
+		const operatingHours = generatorData?.workingHours?.[dayName] ?? null;
 
 		if (operatingHours?.closed) {
 			return <p className="text-red-500">Closed</p>;
 		}
+
 		if (operatingHours?.open && operatingHours?.close) {
 			if (operatingHours?.lunchStart?.length && operatingHours?.lunchEnd?.length) {
 				return (
@@ -1607,10 +1594,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 							{operatingHours.open} - {operatingHours.close}
 						</p>
 					</>
-					// <p>
-					// 	{operatingHours.open} {operatingHours?.lunchStart?.length ? `: ${operatingHours?.lunchStart}` : ""} -
-					// 	{operatingHours?.lunchEnd?.length ? `${operatingHours?.lunchStart} :` : ""} {operatingHours.close}
-					// </p>
 				);
 			}
 		} else {
@@ -1791,6 +1774,8 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				transporterId: user?.uid,
 			};
 
+			const batch = writeBatch(db);
+
 			const transporterRef = doc(db, COLLECTIONS.transporters, formData.selectedSubContractor.id);
 			const transporterDoc = await getDoc(transporterRef);
 
@@ -1799,7 +1784,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				let sharedGenerators = transporterData.sharedGenerators || {};
 				sharedGenerators.toMe = sharedGenerators.toMe || [];
 				sharedGenerators.toMe.push(serviceRequest);
-				await updateDoc(transporterRef, { sharedGenerators });
+				batch.update(transporterRef, { sharedGenerators });
 			} else {
 				console.log("Transporter not found.");
 				return;
@@ -1817,22 +1802,61 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				}
 
 				sharedGenerators.fromMe.push(serviceRequest);
-				await updateDoc(currentTransporterRef, { sharedGenerators });
-
-				setSentSubcontractorRequests((prev) => [serviceRequest, ...prev]);
-				setActiveSentSSRs((prev) => [serviceRequest, ...prev]);
-
-				//setSuccessMessage("Request successfully sent to the subcontractor!");
-				showSuccessToastMessage(
-					`Subcontractor Service Request sent to ${formData.selectedSubContractor.Cname} Successfully!`
-				);
-				setShowSSRForm(false);
-				setTimeout(() => {
-					resetFormForNewSSR();
-				}, 300);
+				batch.update(currentTransporterRef, { sharedGenerators });
 			} else {
 				console.log("Transporter not found.");
+				return;
 			}
+
+			const subcontractorNotificationRef = doc(db, "notifications", formData.selectedSubContractor.id);
+			const notificationDocSnapshot = await getDoc(subcontractorNotificationRef);
+
+			if (!notificationDocSnapshot.exists()) {
+				batch.set(subcontractorNotificationRef, {
+					created: new Date(),
+				});
+			}
+
+			const newNotification = {
+				id: Date.now().toString(),
+				topic: "New SSR Request",
+				type: "SSR_Request",
+				message: `A new Subcontractor Service Request has been received from ${transporterData.companyName} for ${generatorData.generatorName}`,
+				read: false,
+				timeStamp: new Date(),
+			};
+
+			const today = new Date();
+			const todayISOString = today.toISOString().split("T")[0] + "T00:00:00.000Z";
+			const dailyNotificationRef = doc(collection(subcontractorNotificationRef, "dailyNotifications"), todayISOString);
+
+			const dailyNotificationDoc = await getDoc(dailyNotificationRef);
+
+			if (dailyNotificationDoc.exists()) {
+				const existingData = dailyNotificationDoc.data();
+				let notifications = Array.isArray(existingData.notifications) ? [...existingData.notifications] : [];
+
+				notifications.push(newNotification);
+				batch.update(dailyNotificationRef, { notifications });
+			} else {
+				batch.set(dailyNotificationRef, {
+					notifications: [newNotification],
+					dateCreated: new Date(),
+				});
+			}
+
+			await batch.commit();
+
+			setSentSubcontractorRequests((prev) => [serviceRequest, ...prev]);
+			setActiveSentSSRs((prev) => [serviceRequest, ...prev]);
+
+			showSuccessToastMessage(
+				`Subcontractor Service Request sent to ${formData.selectedSubContractor.Cname} Successfully!`
+			);
+			setShowSSRForm(false);
+			setTimeout(() => {
+				resetFormForNewSSR();
+			}, 300);
 		} catch (error) {
 			console.error("Error sending request:", error);
 			showErrorToastMessage("Error sending request to subcontractor");
@@ -1852,7 +1876,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 		try {
 			const batch = writeBatch(db);
-            const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
+			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
 			const transporterDoc = await getDoc(currentTransporterRef);
 			const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
 			const subcontractorDoc = await getDoc(subcontractorRef);
@@ -1988,7 +2012,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								type="button"
 								className="btn btn-primary btn-sm"
 								onClick={() => {
-									navigate(`/admin/generators/${generatorData.id}/generator-profile`);
+									navigate(`/admin/generators/${generatorData.id}/generator-information`);
 								}}
 							>
 								Go Back to Generator Profile
@@ -2014,7 +2038,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								type="button"
 								className="btn btn-primary btn-sm"
 								onClick={() => {
-									navigate(`/admin/generators/${generatorData.id}/generator-profile`);
+									navigate(`/admin/generators/${generatorData.id}/generator-information`);
 								}}
 							>
 								Go Back to Generator Profile
@@ -2044,7 +2068,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								type="button"
 								className="btn btn-primary btn-sm"
 								onClick={() => {
-									navigate(`/admin/generators/${generatorData?.id}/generator-profile`);
+									navigate(`/admin/generators/${generatorData?.id}/generator-information`);
 								}}
 							>
 								Go Back to Generator Profile
@@ -2114,7 +2138,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 											document.getElementById(`delete-SSR`).showModal();
 										}}
 									>
-										Cancel
+										Termination Request Form
 									</button>
 									{console.log("ssr cancel", ssr)}
 									<button
@@ -2586,7 +2610,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 													document.getElementById(`delete-SSR`).showModal();
 												}}
 											>
-												Cancel
+												Termination Request Form
 											</button>
 											{console.log("ssr cancel", ssr)}
 											<button
@@ -2744,11 +2768,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					</div>
 				</div>
 			</div>
-			<form
-				onSubmit={instructionHandleSubmit(instructionSubmitHandler)}
-				ref={instructionsSectionRef}
-				className="grid gap-2"
-			>
+			<form onSubmit={instructionHandleSubmit(instructionSubmitHandler)} className="grid gap-2">
 				<div>
 					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC] mb-2">
 						Generator Service Instructions{" "}
@@ -2760,7 +2780,14 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								name="deliveryNote"
 								control={instructionControl}
 								render={({ field: { onChange, value } }) => (
-									<Textarea value={value} onChange={onChange} label="Delivery Note (DEL)" />
+									<Textarea
+										value={value}
+										onChange={onChange}
+										onBlur={(e) => {
+											autoSaveInstructions({ deliveryNote: e.target.value });
+										}}
+										label="Delivery Note (DEL)"
+									/>
 								)}
 							/>
 							{errors.deliveryNote && <p className="text-red-500 text-sm mt-1">{errors.deliveryNote.message}</p>}
@@ -2768,7 +2795,14 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								name="parkingNote"
 								control={instructionControl}
 								render={({ field: { onChange, value } }) => (
-									<Textarea value={value} onChange={onChange} label="Parking Note (PRK)" />
+									<Textarea
+										value={value}
+										onChange={onChange}
+										onBlur={(e) => {
+											autoSaveInstructions({ parkingNote: e.target.value });
+										}}
+										label="Parking Note (PRK)"
+									/>
 								)}
 							/>
 							{errors.parkingNote && <p className="text-red-500 text-sm mt-1">{errors.parkingNote.message}</p>}
@@ -2776,7 +2810,14 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								name="locationOfWaste"
 								control={instructionControl}
 								render={({ field: { onChange, value } }) => (
-									<Textarea value={value} onChange={onChange} label="Location Of Waste (LOC)" />
+									<Textarea
+										value={value}
+										onChange={onChange}
+										onBlur={(e) => {
+											autoSaveInstructions({ locationOfWaste: e.target.value });
+										}}
+										label="Location Of Waste (LOC)"
+									/>
 								)}
 							/>
 							{errors.locationOfWaste && <p className="text-red-500 text-sm mt-1">{errors.locationOfWaste.message}</p>}
@@ -2786,7 +2827,14 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								name="lockBoxCode"
 								control={instructionControl}
 								render={({ field: { onChange, value } }) => (
-									<Textarea value={value} onChange={onChange} label="Access Code" />
+									<Textarea
+										value={value}
+										onChange={onChange}
+										onBlur={(e) => {
+											autoSaveInstructions({ lockBoxCode: e.target.value });
+										}}
+										label="Access Code"
+									/>
 								)}
 							/>
 							{errors.lockBoxCode && <p className="text-red-500 text-sm mt-1">{errors.lockBoxCode.message}</p>}
@@ -2794,7 +2842,14 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								name="serviceInstructions"
 								control={instructionControl}
 								render={({ field: { onChange, value } }) => (
-									<Textarea value={value} onChange={onChange} label="Service Instructions" />
+									<Textarea
+										value={value}
+										onChange={onChange}
+										onBlur={(e) => {
+											autoSaveInstructions({ serviceInstructions: e.target.value });
+										}}
+										label="Service Instructions"
+									/>
 								)}
 							/>
 							{errors.serviceInstruction && (
@@ -2808,6 +2863,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 										<Textarea
 											value={value}
 											onChange={onChange}
+											isDisabled={isReadOnly}
 											label="OCTO Connect"
 											placeholder={"Contractor's Note"}
 										/>
