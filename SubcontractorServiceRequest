@@ -1,0 +1,1254 @@
+import React, { useContext, useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import ServiceDropdown from "../generator-management/components/reports/ServiceDropdown";
+import Loader from "../../../components/UI/loaders/Loader";
+import { useAuthState } from "react-firebase-hooks/auth";
+import { auth, COLLECTIONS, db } from "../../../config/firebase";
+import { collection, doc, getDoc, getDocs, query, updateDoc, where, onSnapshot, writeBatch } from "firebase/firestore";
+import MultiselectDropdown from "../../../components/UI/dropdowns/MultiselectDropdown";
+import { processGeneratorData } from "../../../utils/firebaseOperations";
+import { formattedDateTime, limitScrollWheelZoom, randomizeCoordinates, renderAddress } from "../../../utils/helpers";
+import { RxCross2 } from "react-icons/rx";
+import Button from "../../../components/UI/Button";
+import useTUserContext from "../../../context/TransporterUserContext";
+import PendingConnections from "./PendingConnections";
+import {
+	SERVICE_TYPES,
+	serviceTypes,
+	frequencyPrimaryOptions,
+	frequencySecondaryOptions,
+	SERVICE_STATUS,
+	usTimeZones,
+} from "../../../utils/constants";
+import { AzureMap, AzureMapsContext, AzureMapsProvider } from "react-azure-maps";
+import CustomAzureGeneratorDashboardMap from "../../generator-portal/dashboard/CustomAzureGeneratorDashboardMap";
+import { useSSRNotifications } from "../../../context/pendingSSRContext";
+import CustomHtmlGeneratorMarker from "../../../components/maps/CustomHtmlGeneratorMarker";
+import { FaMinus, FaPlus } from "react-icons/fa";
+import { AuthenticationType, data } from "azure-maps-control";
+
+export const fetchDocumentsInBatches = async (db, collectionName, docIds) => {
+	if (!docIds.length) return [];
+
+	const chunkArray = (array, size) => {
+		const result = [];
+		for (let i = 0; i < array.length; i += size) {
+			result.push(array.slice(i, i + size));
+		}
+		return result;
+	};
+
+	const chunks = chunkArray(docIds, 10);
+	const collectionRef = collection(db, collectionName);
+
+	try {
+		const queryPromises = chunks.map((chunk) => {
+			const docRefs = chunk.map((id) => doc(collectionRef, id));
+
+			return Promise.all(docRefs.map((docRef) => getDoc(docRef)));
+		});
+
+		const snapshotBatches = await Promise.all(queryPromises);
+
+		const processedDocuments = await Promise.all(
+			snapshotBatches.flat().map(async (docSnapshot) => {
+				if (!docSnapshot.exists()) return null;
+
+				const docData = docSnapshot.data();
+				const dataWithId = {
+					...docData,
+					id: docSnapshot.id,
+				};
+
+				const processed = await processGeneratorData(dataWithId);
+				return processed || dataWithId;
+			})
+		);
+
+		return processedDocuments.filter(Boolean);
+	} catch (error) {
+		console.error("Error fetching documents:", error);
+		throw error;
+	}
+};
+
+export const formatAdd = (data) => {
+	if (!data || !data.address) return "--";
+	const addr = data.address;
+	return [addr.street, addr.city, addr.state, addr.zipCode].filter(Boolean).join(", ") || "--";
+};
+
+const fetchContractorData = async (transporterId, db, COLLECTIONS) => {
+	try {
+		const transporterDoc = await getDoc(doc(db, COLLECTIONS.transporters, transporterId));
+		const transporterMarketDoc = await getDoc(doc(db, COLLECTIONS.octoMarketUsers, transporterId));
+
+		if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
+			console.log("No such transporter!");
+			return { contractors: [], isOctoMarketUser: false };
+		}
+
+		const data = transporterDoc.data();
+		const transporterMarketData = transporterMarketDoc.data();
+		console.log("subData", { data, octoData: transporterMarketData });
+
+		if (!transporterMarketData) return { contractors: [], isOctoMarketUser: true };
+
+		const contractorRelationships = transporterMarketData.connections || {};
+		const acceptedConnections = Object.entries(contractorRelationships).filter(
+			([_, relationship]) => relationship.status === "accepted"
+		);
+
+		const contractorPromises = acceptedConnections.map(async ([contractorId, relationship]) => {
+			const contractorDoc = await getDoc(doc(db, COLLECTIONS.transporters, contractorId));
+
+			if (!contractorDoc.exists()) return null;
+
+			const contractorData = contractorDoc.data();
+			return {
+				id: contractorId,
+				contractorDocid: contractorDoc.id,
+				contractorName: contractorData.companyName ?? "--",
+				address: formatAdd(contractorData),
+				generalEmail: contractorData.generalEmail?.length > 0 ? contractorData.generalEmail : "--",
+				phoneNumber: contractorData.phoneNumber ?? "--",
+				website: contractorData.website?.length ? contractorData.website : "--",
+				sharedGenerators: contractorData.allGens?.length ?? 0,
+				startDate: relationship.acceptedAt || relationship.startDate,
+				status: relationship.status,
+			};
+		});
+
+		const contractors = await Promise.all(contractorPromises);
+		return {
+			contractors: contractors.filter(Boolean),
+			isOctoMarketUser: true,
+		};
+	} catch (error) {
+		console.error("Error fetching contractor data:", error);
+		return { contractors: [], isOctoMarketUser: false };
+	}
+};
+
+const SubcontractorServiceRequest = () => {
+	const [isLoading, setIsLoading] = useState(false);
+	const [hoveredRow, setHoveredRow] = useState(null);
+	const [searchQuery, setSearchQuery] = useState("");
+	const [generators, setGenerators] = useState([]);
+	const [allDatas, setAllDatas] = useState([]);
+	const [genIds, setGenIds] = useState([]);
+	const [pendingCons, setPendingCons] = useState([]);
+	const [currentTransporterData, setCurrentTransporterData] = useState(null);
+	const { user, loading } = useTUserContext();
+	const [isModalOpen, setIsModalOpen] = useState(false);
+	const [toUpdate, setToUpdate] = useState(null);
+	const [subcontractors, setSubcontractors] = useState([]);
+	const [selectedSubcontractors, setSelectedSubcontractors] = useState([]);
+	const [filteredDatas, setFilteredDatas] = useState([]);
+	const [isOctoMarketUser, setIsOctoMarketUser] = useState(false);
+	const navigate = useNavigate();
+	const [itemsMap, setItemsMap] = useState({});
+	const [allServiceFrequencies, setAllServiceFrequencies] = useState([
+		...frequencyPrimaryOptions,
+		...frequencySecondaryOptions,
+	]);
+	const [cancelReason, setCancelReason] = useState("");
+	const [showCancelDialog, setShowCancelDialog] = useState(false);
+
+	const [sharedSubcontractors, setSharedSubcontractors] = useState([]);
+	const [sharedItemsMap, setSharedItemsMap] = useState({});
+	const [randomCoordinates, setRandomCoordinates] = useState({ lat: 33.0181007, lng: 117.0809945 });
+	const [selectedGenerator, setSelectedGenerator] = useState(null);
+	const [showGeneratorDetailsModal, setShowGeneratorDetailsModal] = useState(false);
+	const { pendingSSRCount } = useSSRNotifications();
+	const [allGenerators, setAllGeneratorsData] = useState([]);
+	const [allRoutes, setAllRoutes] = useState([]);
+	const { mapRef, isMapReady, removeMapRef } = useContext(AzureMapsContext);
+
+	const authOptions = {
+		authType: AuthenticationType.subscriptionKey,
+		subscriptionKey: import.meta.env.VITE_AZURE_MAPS_SUBSCRIPTION_KEY,
+	};
+
+	const handleRowClick = (generator) => {
+		setSelectedGenerator(generator);
+		setShowGeneratorDetailsModal(true);
+	};
+
+	const closeGeneratorDetailsModal = () => {
+		setShowGeneratorDetailsModal(false);
+		setSelectedGenerator(null);
+	};
+
+	const statusOptions = [
+		{ label: "All", value: "all" },
+		{ label: "Pending", value: SERVICE_STATUS.PENDING },
+		{ label: "Accepted", value: SERVICE_STATUS.ACCEPTED },
+		{ label: "Declined", value: SERVICE_STATUS.DECLINED },
+		{ label: "Cancelled", value: SERVICE_STATUS.CANCELLED },
+	];
+
+	const [selectedStatuses, setSelectedStatuses] = useState([SERVICE_STATUS.PENDING]);
+
+	useEffect(() => {
+		let unsubscribe = onSnapshot(collection(db, "defaultPriceBook", "services", "containers"), (snap) => {
+			if (snap.docs.length) {
+				let tempMap = {};
+				snap.docs.forEach((el) => {
+					tempMap[el.id] = el.data()?.masterItemName ?? "--";
+				});
+				setItemsMap(tempMap);
+				setSharedItemsMap(tempMap);
+			}
+		});
+		return () => {
+			if (unsubscribe) unsubscribe();
+		};
+	}, []);
+	useEffect(() => {
+		if (!user || !user?.uid) return;
+		const fetchGenerators = async () => {
+			try {
+				const generatorsQuery = query(collection(db, COLLECTIONS.generators), where("transporterId", "==", user?.uid));
+				const querySnapshot = await getDocs(generatorsQuery);
+				const tempGeneratorData = [];
+				querySnapshot.forEach((generator) => {
+					if (
+						generator.exists() &&
+						generator.data().serviceAddCoordinates &&
+						generator.data().serviceAddCoordinates.lat &&
+						generator.data().serviceAddCoordinates.lng
+					) {
+						tempGeneratorData.push({
+							...generator.data(),
+							id: generator.id,
+							randomCoordinates: randomizeCoordinates(
+								generator.data().serviceAddCoordinates.lat,
+								generator.data().serviceAddCoordinates.lng
+							),
+						});
+					}
+				});
+
+				setAllGeneratorsData(tempGeneratorData);
+			} catch (error) {
+				console.error("Error fetching generators:", error);
+			}
+		};
+
+		fetchGenerators();
+	}, [user]);
+
+	useEffect(
+		() => () => {
+			removeMapRef();
+		},
+		[]
+	);
+
+	useEffect(() => {
+		if (
+			isMapReady &&
+			mapRef &&
+			selectedGenerator.serviceAddCoordinates.lng &&
+			selectedGenerator.serviceAddCoordinates.lat
+		) {
+			// // markerPositions.push(new data.Position(generatorData.randomCoordinates.lng, generatorData.randomCoordinates.lat));
+			const box = data.BoundingBox.fromPositions([
+				new data.Position(selectedGenerator.serviceAddCoordinates.lng, selectedGenerator.serviceAddCoordinates.lat),
+			]);
+			const center = data.BoundingBox.getCenter(box);
+			mapRef.setCamera({ center: center, zoom: 12, duration: 200, type: "ease" });
+			limitScrollWheelZoom(mapRef);
+		}
+	}, [isMapReady, mapRef, selectedGenerator]);
+
+	useEffect(() => {
+		const getAllOtherRoutes = async () => {
+			const snap = await getDocs(query(collection(db, COLLECTIONS.routes), where("transporterId", "==", user?.uid)));
+			setAllRoutes([...snap.docs.map((el) => ({ ...el.data(), id: el.id }))]);
+		};
+		if (user && user?.uid) getAllOtherRoutes();
+	}, [user]);
+
+	useEffect(() => {
+		const loadContractorData = async () => {
+			if (!user?.uid) return;
+			console.log("Loading contractor data for:", user?.uid);
+
+			try {
+				const { contractors, isOctoMarketUser: isOcto } = await fetchContractorData(user.uid, db, COLLECTIONS);
+				console.log("Loaded contractors:", contractors);
+				setSubcontractors(contractors);
+				setIsOctoMarketUser(isOcto);
+				setSharedSubcontractors(contractors);
+				setSelectedSubcontractors(["all", ...contractors.map((contractor) => contractor.id)]);
+			} catch (error) {
+				console.error("Error loading contractors:", error);
+			}
+		};
+
+		loadContractorData();
+	}, [user?.uid]);
+
+	useEffect(() => {
+		if (user?.uid) {
+			const transporterRef = doc(db, COLLECTIONS.transporters, user.uid);
+
+			const unsubscribe = onSnapshot(
+				transporterRef,
+				(docSnapshot) => {
+					if (docSnapshot.exists()) {
+						const transporterData = docSnapshot.data();
+						setCurrentTransporterData({ id: user.uid, ...transporterData });
+
+						let sharedGenerators = transporterData?.sharedGenerators;
+						let pendingConns = Array.isArray(sharedGenerators?.toMe) ? sharedGenerators?.toMe : [];
+
+						console.log("Real-time Pending Connections:", pendingConns);
+						let pending = [];
+						let ids = [];
+
+						pendingConns.forEach((item) => {
+							if (item.status) {
+								pending.push(item);
+								ids.push(item.genId);
+							}
+						});
+
+						setPendingCons(pending);
+						setGenIds(ids);
+					}
+				},
+				(error) => {
+					console.error("Error setting up real-time listener:", error);
+				}
+			);
+
+			return () => unsubscribe();
+		}
+	}, [user]);
+
+	const fetchGens = async () => {
+		if (!genIds.length) {
+			setGenerators([]);
+			return;
+		}
+
+		setIsLoading(true);
+		try {
+			let resp = await fetchDocumentsInBatches(db, COLLECTIONS.generators, genIds);
+			setGenerators(resp);
+			console.log("generators resp", resp);
+		} catch (error) {
+			console.log({ error });
+		} finally {
+			setIsLoading(false);
+		}
+	};
+
+	useEffect(() => {
+		fetchGens();
+		console.log("genids", genIds);
+	}, [genIds]);
+
+	useEffect(() => {
+		let latestPendingCons = pendingCons.map((connection) => {
+			let gen = generators.find((item) => connection.genId === item.id) || {};
+			console.log("imp log", gen, connection);
+
+			return {
+				...gen,
+				...connection,
+			};
+		});
+		latestPendingCons = latestPendingCons.sort((a, b) => {
+			let dateA, dateB;
+
+			if (a.timeStamp && typeof a.timeStamp.toDate === "function") {
+				dateA = a.timeStamp.toDate();
+			} else if (a.timeStamp instanceof Date) {
+				dateA = a.timeStamp;
+			} else if (a.timeStamp) {
+				dateA = new Date(a.timeStamp);
+			} else {
+				dateA = new Date(0);
+			}
+
+			if (b.timeStamp && typeof b.timeStamp.toDate === "function") {
+				dateB = b.timeStamp.toDate();
+			} else if (b.timeStamp instanceof Date) {
+				dateB = b.timeStamp;
+			} else if (b.timeStamp) {
+				dateB = new Date(b.timeStamp);
+			} else {
+				dateB = new Date(0);
+			}
+
+			return dateB - dateA;
+		});
+
+		setAllDatas(latestPendingCons);
+	}, [generators, pendingCons]);
+
+	const subcontractorOptions = [
+		{ label: "All", value: "all" },
+		...subcontractors.map((sub) => ({
+			label: sub.contractorName || sub.name || "Unknown",
+			value: sub.id,
+		})),
+	];
+
+	const handleSubcontractorSelect = (selected) => {
+		console.log("selected", selected);
+
+		if (selected.includes("all") && !selectedSubcontractors.includes("all")) {
+			setSelectedSubcontractors(["all", ...subcontractors.map((sub) => sub.id)]);
+		} else if (!selected.includes("all") && selectedSubcontractors.includes("all")) {
+			setSelectedSubcontractors(selected.filter((status) => status !== "all"));
+		} else {
+			setSelectedSubcontractors(selected);
+		}
+	};
+
+	const handleStatusChange = (selected) => {
+		if (selected.includes("all") && !selectedStatuses.includes("all")) {
+			setSelectedStatuses([
+				"all",
+				...statusOptions.filter((option) => option.value !== "all").map((option) => option.value),
+			]);
+		} else if (!selected.includes("all") && selectedStatuses.includes("all")) {
+			setSelectedStatuses(selected.filter((status) => status !== "all"));
+		} else {
+			setSelectedStatuses(selected);
+		}
+	};
+
+	const handleClearFilters = () => {
+		setSelectedSubcontractors(["all", ...subcontractors.map((sub) => sub.id)]);
+		setSelectedStatuses([SERVICE_STATUS.PENDING]);
+		setSearchQuery("");
+		console.log("Filters cleared");
+	};
+
+	useEffect(() => {
+		let filtered = allDatas;
+		if (!selectedSubcontractors.includes("all") && selectedSubcontractors.length > 0) {
+			filtered = filtered.filter((item) => selectedSubcontractors.includes(item.transporterId));
+		}
+		const hasSubcontractorFilter = selectedSubcontractors.length > 0;
+		const hasStatusFilter = selectedStatuses.length > 0;
+		if (!hasSubcontractorFilter || !hasStatusFilter) {
+			setFilteredDatas([]);
+			return;
+		}
+
+		if (!selectedStatuses.includes("all") && selectedStatuses.length > 0) {
+			filtered = filtered.filter((item) => selectedStatuses.includes(item.status));
+		}
+		filtered = [...filtered].sort((a, b) => {
+			let dateA, dateB;
+
+			if (a.timeStamp && typeof a.timeStamp.toDate === "function") {
+				dateA = a.timeStamp.toDate();
+			} else if (a.timeStamp instanceof Date) {
+				dateA = a.timeStamp;
+			} else if (a.timeStamp) {
+				dateA = new Date(a.timeStamp);
+			} else {
+				dateA = new Date(0);
+			}
+
+			if (b.timeStamp && typeof b.timeStamp.toDate === "function") {
+				dateB = b.timeStamp.toDate();
+			} else if (b.timeStamp instanceof Date) {
+				dateB = b.timeStamp;
+			} else if (b.timeStamp) {
+				dateB = new Date(b.timeStamp);
+			} else {
+				dateB = new Date(0);
+			}
+
+			return dateB - dateA;
+		});
+
+		setFilteredDatas(filtered);
+	}, [allDatas, selectedSubcontractors, selectedStatuses]);
+
+	const handleDecline = async (generatorId, subContractorId, SSRID) => {
+		if (!cancelReason) return;
+		console.log(
+			"Declining service with ID:",
+			"generatorId:",
+			generatorId,
+			"transporterId (sender):",
+			subContractorId,
+			"Reason:",
+			cancelReason
+		);
+
+		try {
+			setIsLoading(true);
+			let currTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
+			let currTransporterData = await getDoc(currTransporterRef);
+			let currTransporterSharedGens = currTransporterData.data()?.sharedGenerators ?? {};
+
+			let newTransporterSharedGen = currTransporterSharedGens?.toMe?.map((item) => {
+				if (item.ssrId === SSRID) {
+					return {
+						...item,
+						status: SERVICE_STATUS.DECLINED,
+						cancelReason: cancelReason || "No reason provided",
+						cancelledAt: new Date(),
+					};
+				}
+				return item;
+			});
+
+			console.log("Updated receiver's toMe:", newTransporterSharedGen);
+			await updateDoc(currTransporterRef, {
+				sharedGenerators: {
+					...currTransporterSharedGens,
+					toMe: newTransporterSharedGen,
+				},
+			});
+			let senderRef = doc(db, COLLECTIONS.transporters, subContractorId);
+			let senderData = await getDoc(senderRef);
+
+			if (!senderData.exists()) {
+				console.error("Sender document not found:", subContractorId);
+				throw new Error("Sender document not found");
+			}
+
+			let senderSharedGens = senderData.data()?.sharedGenerators ?? {};
+			if (!Array.isArray(senderSharedGens?.fromMe)) {
+				console.error("Sender's fromMe array not found or invalid");
+				throw new Error("Sender's data structure is invalid");
+			}
+
+			let newSenderSharedGen = senderSharedGens.fromMe.map((item) => {
+				if (item.ssrId === SSRID) {
+					console.log("Found matching SSR in sender's fromMe:", item);
+					return {
+						...item,
+						status: SERVICE_STATUS.DECLINED,
+						cancelReason: cancelReason || "No reason provided",
+						cancelledAt: new Date(),
+					};
+				}
+				return item;
+			});
+
+			console.log("Updated sender's fromMe:", newSenderSharedGen);
+			await updateDoc(senderRef, {
+				sharedGenerators: {
+					...senderSharedGens,
+					fromMe: newSenderSharedGen,
+				},
+			});
+
+			setShowCancelDialog(false);
+			setCancelReason("");
+		} catch (error) {
+			console.error("Error declining service:", error);
+		} finally {
+			setIsLoading(false);
+			setShowCancelDialog(false);
+		}
+	};
+
+	const handleAccept = async (generatorId, subContractorId, SSRID, transporterId, transporterName) => {
+		console.log("Accepting SSR:", "for generator:", generatorId, "from subcontractor:", transporterId);
+
+		try {
+			setIsLoading(true);
+			const batch = writeBatch(db);
+
+			let currTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
+			let currTransporterDoc = await getDoc(currTransporterRef);
+
+			if (!currTransporterDoc.exists()) {
+				console.error("Current transporter document not found");
+				return;
+			}
+
+			let currTransporterData = currTransporterDoc.data();
+			let currTransporterSharedGens = currTransporterData?.sharedGenerators ?? {};
+
+			let newTransporterSharedGen = currTransporterSharedGens?.toMe?.map((item) => {
+				if (item?.ssrId === SSRID) {
+					console.log("Updating status to ACCEPTED for request:", item);
+					return {
+						...item,
+						status: SERVICE_STATUS.ACCEPTED,
+					};
+				}
+				return item;
+			});
+
+			batch.update(currTransporterRef, {
+				sharedGenerators: {
+					...currTransporterSharedGens,
+					toMe: newTransporterSharedGen,
+				},
+			});
+
+			let subContractorRef = doc(db, COLLECTIONS.transporters, transporterId);
+			let subContractorDoc = await getDoc(subContractorRef);
+
+			if (!subContractorDoc.exists()) {
+				console.error("Subcontractor document not found");
+				return;
+			}
+
+			let subContractorData = subContractorDoc.data();
+			let subContractorSharedGens = subContractorData?.sharedGenerators ?? {};
+
+			let newSubContractorSharedGen = subContractorSharedGens?.fromMe?.map((item) => {
+				if (item?.ssrId === SSRID) {
+					console.log("Updating subcontractor fromMe status to ACCEPTED for:", item);
+					return {
+						...item,
+						status: SERVICE_STATUS.ACCEPTED,
+					};
+				}
+				return item;
+			});
+
+			batch.update(subContractorRef, {
+				sharedGenerators: {
+					...subContractorSharedGens,
+					fromMe: newSubContractorSharedGen,
+				},
+			});
+
+			let generatorRef = doc(db, COLLECTIONS.generators, generatorId);
+			let generatorDoc = await getDoc(generatorRef);
+
+			if (!generatorDoc.exists()) {
+				console.error("Generator document not found");
+				return;
+			}
+
+			let generatorData = generatorDoc.data();
+
+			const existingSubcontractors = generatorData.subContractors || [];
+			const subcontractorExists = existingSubcontractors.some((sub) => sub.id === subContractorId);
+			let updatedSubcontractors = existingSubcontractors;
+
+			if (!subcontractorExists) {
+				updatedSubcontractors = [
+					...existingSubcontractors,
+					{
+						id: subContractorId,
+						name: transporterName,
+						addedAt: new Date(),
+						subContractorName: currTransporterData.companyName,
+					},
+				];
+			}
+
+			batch.update(generatorRef, {
+				isSubContracted: true,
+				subContractors: updatedSubcontractors,
+				subContractor: {
+					id: subContractorId,
+					name: transporterName,
+					subContractorName: currTransporterData.companyName,
+				},
+			});
+
+			await batch.commit();
+			console.log("Successfully updated status to ACCEPTED");
+		} catch (error) {
+			console.error("Error accepting generator:", error);
+		} finally {
+			setIsLoading(false);
+		}
+	};
+	useEffect(() => {
+		console.log({ selectedGenerator });
+		if (!selectedGenerator) return;
+		if (
+			selectedGenerator?.serviceAddCoordinates &&
+			selectedGenerator.serviceAddCoordinates?.lat &&
+			selectedGenerator.serviceAddCoordinates?.lng
+		) {
+			setRandomCoordinates(
+				randomizeCoordinates(selectedGenerator.serviceAddCoordinates?.lat, selectedGenerator.serviceAddCoordinates?.lng)
+			);
+		}
+
+		return () => {};
+	}, [selectedGenerator]);
+
+	const pendingConnectionsProps = {
+		user,
+		db,
+		sharedSubcontractors,
+		sharedItemsMap,
+		allServiceFrequencies,
+		fetchDocumentsInBatches,
+		formatAdd,
+		fetchContractorData,
+	};
+	const capitalizeFirstLetter = (string) => {
+		if (!string) return "";
+		return string.charAt(0).toUpperCase() + string.slice(1).toLowerCase();
+	};
+	const zoomIn = () => {
+		if (mapRef) {
+			const currentZoom = mapRef.getCamera().zoom;
+			mapRef.setCamera({ zoom: currentZoom + 1 });
+		}
+	};
+
+	const zoomOut = () => {
+		if (mapRef) {
+			const currentZoom = mapRef.getCamera().zoom;
+			mapRef.setCamera({ zoom: currentZoom - 1 });
+		}
+	};
+	const shortAddress = (address) => {
+		return `${address?.city ? `${address?.city}${address?.state || address?.zipCode ? ", " : ""}` : ""}${
+			address?.state ? `${address?.state}${address?.zipCode ? " " : ""}` : ""
+		}${address?.zipCode ? `${address?.zipCode}` : ""}`;
+	};
+
+	return (
+		<>
+			<div className="p-6">
+				<div className="main-container flex flex-col border border-cardBorderCol bg-white rounded-cardRadii h-1/2 gap-2">
+					<div className="text-lg px-8 py-4 flex items-center gap-2">
+						<div className="flex flex-col gap-2">
+							<div className="text-xl xl:text-2xl font-semibold text-black">Incoming SSR</div>
+							<h6 className="text-nowrap text-sm font-normal text-cardTextGray ">
+								{filteredDatas?.length} of {allDatas.length} Requests
+							</h6>
+						</div>
+						<div className="flex items-center gap-3 ml-auto">
+							<MultiselectDropdown
+								className="px-4"
+								buttonText="Contractor"
+								options={subcontractorOptions}
+								selectedOptions={selectedSubcontractors}
+								onSelectedOptionsChange={handleSubcontractorSelect}
+							/>
+							<MultiselectDropdown
+								className="px-4"
+								buttonText="Status"
+								options={statusOptions}
+								selectedOptions={selectedStatuses}
+								onSelectedOptionsChange={handleStatusChange}
+							/>
+							<button
+								className="px-2 text-primary text-nowrap hover:text-blue-900 text-sm"
+								onClick={handleClearFilters}
+							>
+								Clear Filters
+							</button>
+						</div>
+					</div>
+					<div className="overflow-x-scroll overflow-y-scroll">
+						<div className="bg-[#E5F2FF] flex font-medium min-w-fit py-4 px-8">
+							<div className="flex items-center">
+								<div className="truncate w-60">Contractor Name</div>
+								<div className="truncate w-40">OCTO Number</div>
+								<div className="truncate w-60">Generator Name</div>
+								<div className="truncate w-80">Service Address</div>
+								<div className="truncate w-52">Service Type</div>
+								<div className="truncate w-60">Service Frequency</div>
+								<div className="truncate w-60">Expected Containers</div>
+								<div className="truncate w-32 ml-2">Status</div>
+								<div className="truncate w-60">Date/Time</div>
+								<div className="truncate w-60">Contractor Note</div>
+								<div className="truncate w-40">Pricebook</div>
+								<div className="truncate w-60 ml-2">Action</div>
+							</div>
+						</div>
+						{console.log("Rendering filteredDatas:", filteredDatas)}
+						<div className={`min-w-fit overflow-y-scroll min-h-40 h-[50vh] overflow-x-scroll`}>
+							{isLoading ? (
+								<Loader height="h-12 pt-4" />
+							) : filteredDatas?.length > 0 ? (
+								filteredDatas.map((generator, index) => (
+									<div
+										key={generator.ssrId || `generator-${index}`}
+										className={`flex w-full items-center px-8 transition-colors duration-300 border-b border-gray-300 min-h-[45px] hover:cursor-pointer`}
+										onClick={() => handleRowClick(generator)}
+									>
+										<div className={`w-full flex items-center`}>
+											<div className="truncate w-60 h-full">{generator?.transporterName ?? "--"}</div>
+											{generator.status != SERVICE_STATUS.ACCEPTED ? (
+												<div className="w-40 h-full text-cardTextBlue truncate">{generator.octoNumber ?? "--"}</div>
+											) : (
+												<Link
+													to={`/admin/generators/${generator.id}/routes`}
+													className="w-40 h-full text-cardTextBlue truncate"
+												>
+													{generator.octoNumber ?? "--"}
+												</Link>
+											)}
+											<div className="truncate w-60 h-full">
+												{generator.status === SERVICE_STATUS.ACCEPTED
+													? generator.generatorName ?? "--"
+													: generator.status === SERVICE_STATUS.DECLINED ||
+													  generator.status === SERVICE_STATUS.CANCELLED
+													? "Service Declined/Canceled"
+													: "Accept Service To See"}
+											</div>
+											<div className="truncate w-80 h-full">
+												{generator.status === SERVICE_STATUS.ACCEPTED
+													? renderAddress(generator.serviceAddress)
+													: shortAddress(generator.serviceAddress)}
+											</div>
+											<div className="truncate h-full w-52 ml-2">
+												{generator.serviceType?.length > 0 ? (
+													Array.isArray(generator.serviceType) ? (
+														generator.serviceType.map((type, i) => (
+															<span key={i} className="whitespace-nowrap">
+																{serviceTypes.find((item) => item.value === type)?.label || type}
+																{i < generator.serviceType.length - 1 ? ", " : ""}
+															</span>
+														))
+													) : (
+														<span>
+															{serviceTypes.find((item) => item.value === generator.serviceType)?.label ||
+																generator.serviceType}
+														</span>
+													)
+												) : (
+													"--"
+												)}
+											</div>
+											<div className="truncate h-full w-60">
+												{generator.serviceFrequency
+													? allServiceFrequencies?.find((el) => el.value === generator.serviceFrequency)?.label ?? "N/A"
+													: "N/A"}
+											</div>
+											<div className="h-full w-60 overflow-hidden">
+												{generator.expectedItemsOrServices?.length > 0 ? (
+													<div className="flex flex-wrap gap-1">
+														{generator.expectedItemsOrServices.map((itemObj, idx) => (
+															<div key={idx} className="inline-flex items-center text-sm">
+																<span className="font-medium whitespace-nowrap"> ({itemObj?.quantity || 1}) </span>
+																<span className="truncate max-w-44 ml-1">
+																	{itemsMap?.[itemObj?.item] || itemObj?.item}
+																</span>
+															</div>
+														))}
+													</div>
+												) : (
+													"--"
+												)}
+											</div>
+											<div className="truncate h-full w-32">{capitalizeFirstLetter(generator.status)}</div>
+											<div className="truncate h-full w-60">{formattedDateTime(generator.timeStamp) ?? "--"}</div>
+											<div className="h-full w-60 whitespace-normal overflow-auto">{generator.serviceNote ?? "--"}</div>
+											<div className="h-full w-40 whitespace-normal overflow-auto">{generator.pricebook ?? "--"}</div>
+											<div className="flex gap-2 w-60 items-center">
+												<button
+													className={`px-4 py-1 text-nowrap transition-colors duration-200 text-white rounded-full ${"bg-primary hover:bg-primary/90"}`}
+													onClick={() => handleRowClick(generator)}
+												>
+													View Details
+												</button>
+											</div>
+										</div>
+									</div>
+								))
+							) : (
+								<div className="flex min-h-40 text-cardTextGray text-lg justify-center items-center">
+									<p>No result found</p>
+								</div>
+							)}
+						</div>
+					</div>
+				</div>
+				{isModalOpen && (
+					<div className="z-40 fixed inset-0 bg-[#CCCCCC87] bg-opacity-50 flex justify-center items-center">
+						<div className="bg-white z-20 rounded-cardRadii max-w-md w-full min-h-fit">
+							<div className="flex flex-col justify-between min-h-40 p-6">
+								<h6 className="text-2xl font-semibold">Are you sure you want to decline this service request?</h6>
+								<div className="flex justify-end mt-4">
+									<button
+										onClick={() => setIsModalOpen(false)}
+										className="bg-[#F3F3F3] rounded-full w-24 p-1 px-4 mr-2"
+									>
+										No
+									</button>
+									<button
+										onClick={() => {
+											setIsModalOpen(false);
+											setShowCancelDialog(true);
+										}}
+										className={`px-4 py-1 w-24 bg-primary transition-colors duration-200 text-white rounded-full`}
+									>
+										Yes
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				)}
+
+				{/* Cancel Service Request Dialog */}
+				<dialog open={showCancelDialog} id="delete-SSR" className="modal">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => {
+									setShowCancelDialog(false);
+									setCancelReason("");
+								}}
+							>
+								✕
+							</button>
+						</div>
+						<h3 className="font-bold text-lg">Are You Sure?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">Proceeding with this operation will decline the Subcontractor Service Request.</p>
+							<p>Enter Note for Declining *</p>
+							<textarea
+								rows={3}
+								value={cancelReason}
+								onChange={(e) => setCancelReason(e.target.value)}
+								className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
+								required
+							/>
+						</div>
+						<div className="flex w-full justify-between">
+							<button
+								className="btn btn-error btn-sm"
+								type="button"
+								onClick={() => {
+									if (toUpdate) {
+										handleDecline(toUpdate.generatorId, toUpdate.subContractorId, toUpdate.ssrId);
+									}
+								}}
+							>
+								Decline Request
+							</button>
+							<button
+								type="button"
+								className="btn btn-primary btn-sm"
+								onClick={() => {
+									setShowCancelDialog(false);
+									setCancelReason("");
+								}}
+							>
+								Keep Request
+							</button>
+						</div>
+					</div>
+				</dialog>
+			</div>
+			{/* Generator Details Modal */}
+			{showGeneratorDetailsModal && selectedGenerator && (
+				<div className="z-40 fixed inset-0 bg-black/50 flex justify-center items-center">
+					<div className="bg-white z-20 rounded-xl max-w-[150vh] w-full max-h-[90vh] shadow-lg">
+						<div className="flex justify-between items-center  p-5 ">
+							<div>
+								<h2 className="text-xl font-semibold text-gray-800">
+									{selectedGenerator.status === SERVICE_STATUS.ACCEPTED
+										? selectedGenerator.generatorName || "Generator Details"
+										: "Subcontractor Service Request (SSR) Details"}
+								</h2>
+								<button
+									className="border border-gray-300 rounded-full py-2 px-6 hover:bg-gray-50 mt-2"
+									onClick={() => {
+										navigate(`/admin/generators/${selectedGenerator?.id}/generator-Dashboard`);
+									}}
+									disabled={selectedGenerator.status !== SERVICE_STATUS.ACCEPTED}
+								>
+									View Profile
+								</button>
+							</div>
+
+							<div className="flex items-center gap-3 overflow-y-auto">
+								<span
+									className={`px-3 py-1 rounded-full text-xs font-medium ${
+										selectedGenerator.status === SERVICE_STATUS.PENDING
+											? "bg-yellow-100 text-yellow-800"
+											: selectedGenerator.status === SERVICE_STATUS.ACCEPTED
+											? "bg-green-100 text-green-800"
+											: selectedGenerator.status === SERVICE_STATUS.DECLINED
+											? "bg-red-100 text-red-800"
+											: "bg-gray-100 text-gray-800"
+									}`}
+								>
+									{capitalizeFirstLetter(selectedGenerator.status)}
+								</span>
+								<button
+									onClick={closeGeneratorDetailsModal}
+									className="text-gray-500 hover:bg-gray-100 rounded-full w-8 h-8 flex items-center justify-center"
+								>
+									<RxCross2 />
+								</button>
+							</div>
+						</div>
+
+						<div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[calc(85vh-150px)]">
+							<div className="p-5 overflow-y-auto">
+								<div className="space-y-4">
+									<h3 className="font-medium text-gray-700">Generator Information</h3>
+
+									<div className="grid grid-cols-2 gap-4">
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">OCTO Number</p>
+											<p className="font-medium">{selectedGenerator.octoNumber || "--"}</p>
+										</div>
+
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Service Address</p>
+											<p className="font-medium">{renderAddress(selectedGenerator.serviceAddress) || "--"}</p>
+										</div>
+
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Contractor Name</p>
+											<p className="font-medium">{selectedGenerator.transporterName || "--"}</p>
+										</div>
+
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Request ID</p>
+											<p className="font-medium">{selectedGenerator.ssrId || "--"}</p>
+										</div>
+									</div>
+
+									<h3 className="font-medium text-gray-700 pt-2">Service Details</h3>
+
+									<div className="grid grid-cols-2 gap-4">
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Service Type</p>
+											<p className="font-medium">
+												{selectedGenerator.serviceType?.length > 0 ? (
+													Array.isArray(selectedGenerator.serviceType) ? (
+														selectedGenerator.serviceType.map((type, i) => (
+															<span key={i} className="whitespace-nowrap">
+																{serviceTypes.find((item) => item.value === type)?.label || type}
+																{i < selectedGenerator.serviceType.length - 1 ? ", " : ""}
+															</span>
+														))
+													) : (
+														<span>
+															{serviceTypes.find((item) => item.value === selectedGenerator.serviceType)?.label ||
+																selectedGenerator.serviceType}
+														</span>
+													)
+												) : (
+													"--"
+												)}
+											</p>
+										</div>
+
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Service Frequency</p>
+											<p className="font-medium">
+												{selectedGenerator.serviceFrequency
+													? allServiceFrequencies?.find((el) => el.value === selectedGenerator.serviceFrequency)
+															?.label ?? "N/A"
+													: "N/A"}
+											</p>
+										</div>
+
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Request Date</p>
+											<p className="font-medium">{formattedDateTime(selectedGenerator.timeStamp) || "--"}</p>
+										</div>
+
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Pricebook</p>
+											<p className="font-medium">{selectedGenerator.pricebook || "--"}</p>
+										</div>
+										<div className="bg-gray-50 p-3 rounded-lg">
+											<p className="text-sm text-gray-500">Contractor Note</p>
+											<p className="font-medium">{selectedGenerator.serviceNote || "--"}</p>
+										</div>
+									</div>
+									<h3 className="font-medium text-gray-700 pt-2">Expected Containers</h3>
+									<div className="bg-gray-50 p-3 rounded-lg">
+										{selectedGenerator.expectedItemsOrServices?.length > 0 ? (
+											<div className="grid grid-cols-1 gap-2">
+												{selectedGenerator.expectedItemsOrServices.map((itemObj, idx) => (
+													<div key={idx} className="bg-white p-3 rounded-md flex items-center">
+														<span className="font-medium mr-2 px-2 py-1 rounded whitespace-nowrap">
+															({itemObj?.quantity || 1})
+														</span>
+														<span className="break-words">{itemsMap?.[itemObj?.item] || itemObj?.item}</span>
+													</div>
+												))}
+											</div>
+										) : (
+											<p className="text-gray-500">No container information available</p>
+										)}
+									</div>
+								</div>
+							</div>
+
+							<div className="h-full">
+								{console.log("modal data", selectedGenerator)}
+								<div className="w-full h-2/3 rounded-xl p-2 z-50 bg-white">
+									<AzureMap options={{ authOptions: authOptions, view: "Auto" }}>
+										{allGenerators.length > 0 &&
+											allGenerators.map((genData) => {
+												if (
+													genData?.serviceAddCoordinates &&
+													genData?.serviceAddCoordinates.lat &&
+													genData?.serviceAddCoordinates.lng
+												) {
+													return (
+														<CustomHtmlGeneratorMarker
+															key={genData.id}
+															genData={genData}
+															draggable={true}
+															allRoutes={allRoutes}
+															isCurrent={selectedGenerator.id === genData.id ? true : false}
+														/>
+													);
+												}
+												return null;
+											})}
+										<div className="absolute bottom-5 right-5 flex flex-col gap-2 z-10">
+											<button
+												onClick={zoomIn}
+												className="w-10 h-10 flex items-center justify-center 
+																	 bg-gray-400 bg-opacity-30 hover:bg-opacity-50 active:bg-opacity-100 
+																		font-bold rounded shadow-md"
+											>
+												<FaPlus />
+											</button>
+											<button
+												onClick={zoomOut}
+												className="w-10 h-10 flex items-center justify-center 
+																	 bg-gray-400 bg-opacity-30 hover:bg-opacity-50 active:bg-opacity-100 
+																	 font-bold rounded shadow-md"
+											>
+												<FaMinus />
+											</button>
+										</div>
+									</AzureMap>
+								</div>
+								<GeneratorOfficeHours
+									workingHours={selectedGenerator?.workingHours}
+									genTimeZone={selectedGenerator?.workingHours?.timeZone}
+								/>
+							</div>
+						</div>
+
+						<div className=" p-4 flex justify-end gap-3">
+							{selectedGenerator.status === SERVICE_STATUS.PENDING && (
+								<>
+									<button
+										className="bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-full py-2 px-6"
+										onClick={(e) => {
+											e.stopPropagation();
+											setShowGeneratorDetailsModal(false);
+											setShowCancelDialog(true);
+											setToUpdate({
+												generatorId: selectedGenerator?.genId,
+												subContractorId: selectedGenerator?.transporterId,
+												ssrId: selectedGenerator?.ssrId,
+											});
+										}}
+									>
+										Decline
+									</button>
+									<button
+										className="bg-primary hover:bg-primary/90 text-white rounded-full py-2 px-6"
+										onClick={(e) => {
+											e.stopPropagation();
+											setShowGeneratorDetailsModal(false);
+											handleAccept(
+												selectedGenerator.genId,
+												selectedGenerator.subcontractorId,
+												selectedGenerator.ssrId,
+												selectedGenerator.transporterId,
+												selectedGenerator.transporterName
+											);
+										}}
+									>
+										Accept & Import
+									</button>
+								</>
+							)}
+							<button
+								className="border border-gray-300 rounded-full py-2 px-6 hover:bg-gray-50"
+								onClick={closeGeneratorDetailsModal}
+							>
+								Close
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			<PendingConnections {...pendingConnectionsProps} />
+		</>
+	);
+};
+
+export default SubcontractorServiceRequest;
+
+const GeneratorOfficeHours = ({ workingHours = {}, genTimeZone }) => {
+	const timeZoneValue = genTimeZone || workingHours?.timeZone;
+	const timeZoneLabel = usTimeZones.find((item) => item.value == timeZoneValue)?.label || "No timezone";
+
+	const { timeZone: _, ...workingHoursWithoutTimeZone } = workingHours || {};
+
+	const dayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+	const dayAbbr = {
+		Monday: "Mon",
+		Tuesday: "Tue",
+		Wednesday: "Wed",
+		Thursday: "Thu",
+		Friday: "Fri",
+		Saturday: "Sat",
+		Sunday: "Sun",
+	};
+
+	const defaultOfficeHours = dayOrder.reduce((acc, day) => {
+		acc[day] = { open: "--", close: "--", closed: false };
+		return acc;
+	}, {});
+
+	const officeHours = { ...defaultOfficeHours, ...workingHoursWithoutTimeZone };
+	const groupedHours = [];
+	let currentGroup = null;
+
+	dayOrder.forEach((day) => {
+		const hours = officeHours[day];
+		const hoursString = hours.closed ? "Closed" : `${hours.open || "--"} - ${hours.close || "--"}`;
+
+		if (!currentGroup || currentGroup.hoursString !== hoursString) {
+			currentGroup = { days: [day], hoursString, hours };
+			groupedHours.push(currentGroup);
+		} else {
+			currentGroup.days.push(day);
+		}
+	});
+
+	return (
+		<div className="mt-2 px-3">
+			<div className="rounded p-3 text-sm">
+				<div className="flex justify-between items-center mb-2 mt-2">
+					<h3 className="text-gray-900 font-medium">Generator Office Hours</h3>
+					<span className="text-xs text-gray-500">{timeZoneLabel}</span>
+				</div>
+
+				<div className="space-y-1">
+					{groupedHours.map((group, idx) => (
+						<div key={idx} className="flex justify-between">
+							<div className="font-medium">
+								{group.days.length === 1
+									? dayAbbr[group.days[0]]
+									: `${dayAbbr[group.days[0]]} - ${dayAbbr[group.days[group.days.length - 1]]}`}
+							</div>
+							<div className={group.hours.closed ? "text-gray-500" : ""}>{group.hoursString}</div>
+						</div>
+					))}
+				</div>
+			</div>
+		</div>
+	);
+};
