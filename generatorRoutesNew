@@ -127,7 +127,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		},
 	});
 
-	
 	const { fields, append, remove } = useFieldArray({
 		control,
 		name: "serviceSchedules",
@@ -222,17 +221,16 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			}
 		}
 	}, [allGeneratorsData, isLoadingServices]);
-	  const {
-    subContractorContainers,
-    handleSubcontractorSelected,
-        isOctoMarketUser,
-    subContractorData,
-    sentSubcontractorRequests,
-    activeSentSSRs,
-    cancelSubcontractorRequest,
-    sendSubcontractorRequest,
-  
-  } = useSSRManagement(user?.uid, generatorData?.id);
+	const {
+		subContractorContainers,
+		handleSubcontractorSelected,
+		isOctoMarketUser,
+		subContractorData,
+		sentSubcontractorRequests,
+		activeSentSSRs,
+		cancelSubcontractorRequest,
+		sendSubcontractorRequest,
+	} = useSSRManagement(user?.uid, generatorData?.id);
 
 	useEffect(() => {
 		if (!generatorData?.id) return;
@@ -393,7 +391,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			loadTransporterContainers();
 		}
 	}, [user?.uid]);
-
 
 	useEffect(() => {
 		if (!generatorData) return;
@@ -985,49 +982,48 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	//   };
 	// }, [showSSRFrom]);
 
-	
-const SsrActionButtons = memo(
-    ({ isReadOnly, onCancel, onSubmit, currentSSRIndex, setCurrentSSRIndex, sentSubcontractorRequests }) => {
-        return (
-            <div className="w-full flex justify-end p-2 gap-4">
-                {!isReadOnly && (
-                    <>
-                        <button
-                            type="button"
-                            className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
-                            onClick={onCancel}
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="button"
-                            className="rounded-full px-4 py-2 text-sm bg-primary-500 hover:bg-primary-500/90 text-white transition"
-                            onClick={onSubmit} 
-                        >
-                            Send To Subcontractor
-                        </button>
-                    </>
-                )}
-                {isReadOnly && sentSubcontractorRequests[currentSSRIndex]?.subcontractorId !== user?.uid && (
-    <>
-        <button
-            type="button"
-            className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
-            onClick={() => {
-                const currentSsr = sentSubcontractorRequests[currentSSRIndex];
-				            setCurrentSSRIndex(currentSSRIndex);
+	const SsrActionButtons = memo(
+		({ isReadOnly, onCancel, onSubmit, currentSSRIndex, setCurrentSSRIndex, sentSubcontractorRequests }) => {
+			return (
+				<div className="w-full flex justify-end p-2 gap-4">
+					{!isReadOnly && (
+						<>
+							<button
+								type="button"
+								className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+								onClick={onCancel}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className="rounded-full px-4 py-2 text-sm bg-primary-500 hover:bg-primary-500/90 text-white transition"
+								onClick={onSubmit}
+							>
+								Send To Subcontractor
+							</button>
+						</>
+					)}
+					{isReadOnly && sentSubcontractorRequests[currentSSRIndex]?.subcontractorId !== user?.uid && (
+						<>
+							<button
+								type="button"
+								className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+								onClick={() => {
+									const currentSsr = sentSubcontractorRequests[currentSSRIndex];
+									setCurrentSSRIndex(currentSSRIndex);
 
-                document.getElementById(`delete-SSR`).showModal();
-            }}
-        >
-            Termination Request Form
-        </button>
-    </>
-)}
-            </div>
-        );
-    }
-);
+									document.getElementById(`delete-SSR`).showModal();
+								}}
+							>
+								Termination Request Form
+							</button>
+						</>
+					)}
+				</div>
+			);
+		}
+	);
 
 	const renderSSRButton = () => {
 		let isDisable = false;
@@ -1077,7 +1073,6 @@ const SsrActionButtons = memo(
 			</div>
 		);
 	};
-
 
 	const renderOperatingHours = (date = new Date()) => {
 		const dayNo = date.getDay();
@@ -1195,39 +1190,38 @@ const SsrActionButtons = memo(
 	};
 
 	const handleCancelCurrentSSR = () => {
-    console.log("Cancel reason:", cancelReason);
-    cancelSubcontractorRequest(sentSubcontractorRequests[currentSSRIndex], cancelReason)
-        .then((success) => {
-            if (success) {
-                document.getElementById(`delete-SSR`).close();
-                setCancelReason(""); 
-            }
-        });
-};
-	
-	const handleSendToSubcontractor = async () => {
-    if (!user || !user?.uid) return;
-    
-    try {
-        const isValid = await trigger();
-        if (!isValid) {
-            console.log("Validation errors:", errors);
-            return;
-        }
+		console.log("Cancel reason:", cancelReason);
+		cancelSubcontractorRequest(sentSubcontractorRequests[currentSSRIndex], cancelReason).then((success) => {
+			if (success) {
+				document.getElementById(`delete-SSR`).close();
+				setCancelReason("");
+			}
+		});
+	};
 
-        const formData = getValues();
-        const success = await sendSubcontractorRequest(formData, transporterData, generatorData);
-        if (success) {
-            setShowSSRForm(false);
-            setTimeout(() => {
-                resetFormForNewSSR();
-            }, 300);
-        }
-    } catch (error) {
-        console.error("Error in handleSendToSubcontractor:", error);
-        showErrorToastMessage("Error sending request to subcontractor");
-    }
-};
+	const handleSendToSubcontractor = async () => {
+		if (!user || !user?.uid) return;
+
+		try {
+			const isValid = await trigger();
+			if (!isValid) {
+				console.log("Validation errors:", errors);
+				return;
+			}
+
+			const formData = getValues();
+			const success = await sendSubcontractorRequest(formData, transporterData, generatorData);
+			if (success) {
+				setShowSSRForm(false);
+				setTimeout(() => {
+					resetFormForNewSSR();
+				}, 300);
+			}
+		} catch (error) {
+			console.error("Error in handleSendToSubcontractor:", error);
+			showErrorToastMessage("Error sending request to subcontractor");
+		}
+	};
 
 	let formatAdd = (transporter) => {
 		let formattedAdd = "";
@@ -1403,32 +1397,32 @@ const SsrActionButtons = memo(
 
 					{activeSentSSRs.map((ssr, index) => (
 						<div key={ssr.ssrId || index} className="pb-4">
-							  <SsrFormComponent
-                                isReadOnly={true}
-                                ssrData={ssr}
-                                control={control}
-                                trigger={trigger}
-                                setValue={setValue}
-                                getValues={getValues}
-                                watch={watch}
-                                errors={errors}
-                                serviceFrequencyOptions={serviceFrequencyOptions}
-                                weekdayOptions={weekdayOptions}
-                                subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-                                subContractorData={subContractorData}
-                                itemsMap={itemsMap}
-                                serviceTypes={serviceTypes}
-                                subContractorContainers={subContractorContainers}
-                                itemsOptions={itemsOptions}
-                                handleSubcontractorSelected={handleSubcontractorSelected}
-                                SERVICE_TYPES={SERVICE_TYPES}
-                                serviceNoteRef={serviceNoteRef}
-                                KeepContainers={KeepContainers}
-                                setKeepContainers={setKeepContainers}
-                                serviceDurationOptions={serviceDurationOptions}
-                                transporterData={transporterData}
-                                currentUserId={user?.uid}
-                            />
+							<SsrFormComponent
+								isReadOnly={true}
+								ssrData={ssr}
+								control={control}
+								trigger={trigger}
+								setValue={setValue}
+								getValues={getValues}
+								watch={watch}
+								errors={errors}
+								serviceFrequencyOptions={serviceFrequencyOptions}
+								weekdayOptions={weekdayOptions}
+								subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+								subContractorData={subContractorData}
+								itemsMap={itemsMap}
+								serviceTypes={serviceTypes}
+								subContractorContainers={subContractorContainers}
+								itemsOptions={itemsOptions}
+								handleSubcontractorSelected={handleSubcontractorSelected}
+								SERVICE_TYPES={SERVICE_TYPES}
+								serviceNoteRef={serviceNoteRef}
+								KeepContainers={KeepContainers}
+								setKeepContainers={setKeepContainers}
+								serviceDurationOptions={serviceDurationOptions}
+								transporterData={transporterData}
+								currentUserId={user?.uid}
+							/>
 						</div>
 					))}
 				</div>
@@ -1867,98 +1861,67 @@ const SsrActionButtons = memo(
 						</dialog>
 					</div>
 				))}
+			</form>
+			{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
+				<div>
+					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Subcontractor Service Requests (SSR)</h6>
 
-				<>
-					{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
-						<div>
-							<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">
-								Subcontractor Service Requests (SSR)
-							</h6>
-
-							{activeSentSSRs.map((ssr, index) => (
-								<div key={ssr.ssrId || index} className="pb-4">
-								     <SsrFormComponent
-                                isReadOnly={true}
-                                ssrData={ssr}
-                                control={control}
-                                trigger={trigger}
-                                setValue={setValue}
-                                getValues={getValues}
-                                watch={watch}
-                                errors={errors}
-                                serviceFrequencyOptions={serviceFrequencyOptions}
-                                weekdayOptions={weekdayOptions}
-                                subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-                                subContractorData={subContractorData}
-                                itemsMap={itemsMap}
-                                serviceTypes={serviceTypes}
-                                subContractorContainers={subContractorContainers}
-                                itemsOptions={itemsOptions}
-                                handleSubcontractorSelected={handleSubcontractorSelected}
-                                SERVICE_TYPES={SERVICE_TYPES}
-                                serviceNoteRef={serviceNoteRef}
-                                KeepContainers={KeepContainers}
-                                setKeepContainers={setKeepContainers}
-                                serviceDurationOptions={serviceDurationOptions}
-                                transporterData={transporterData}
-                                currentUserId={user?.uid}
-                            />
-                            {!isReadOnly && (
-                                <SsrActionButtons
-                                    isReadOnly={true}
-                                    ssr={ssr}
-                                    currentSSRIndex={sentSubcontractorRequests.findIndex((r) => r.ssrId === ssr.ssrId)}
-                                    setCurrentSSRIndex={setCurrentSSRIndex}
-                                    sentSubcontractorRequests={sentSubcontractorRequests}
-                                />
-                            )}
-                        </div>
-							))}
+					{activeSentSSRs.map((ssr, index) => (
+						<div key={ssr.ssrId || index} className="pb-4">
+							<SsrFormComponent
+								isReadOnly={true}
+								ssrData={ssr}
+								control={control}
+								trigger={trigger}
+								setValue={setValue}
+								getValues={getValues}
+								watch={watch}
+								errors={errors}
+								serviceFrequencyOptions={serviceFrequencyOptions}
+								weekdayOptions={weekdayOptions}
+								subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+								subContractorData={subContractorData}
+								itemsMap={itemsMap}
+								serviceTypes={serviceTypes}
+								subContractorContainers={subContractorContainers}
+								itemsOptions={itemsOptions}
+								handleSubcontractorSelected={handleSubcontractorSelected}
+								SERVICE_TYPES={SERVICE_TYPES}
+								serviceNoteRef={serviceNoteRef}
+								KeepContainers={KeepContainers}
+								setKeepContainers={setKeepContainers}
+								serviceDurationOptions={serviceDurationOptions}
+								transporterData={transporterData}
+								currentUserId={user?.uid}
+							/>
 						</div>
-					)}
-					{showSSRFrom && (
-						<div className="mb-8 pb-4">
-                              <SsrFormComponent
-                                isReadOnly={false}
-                                ssrData={null}
-                                control={control}
-                                trigger={trigger}
-                                setValue={setValue}
-                                getValues={getValues}
-                                watch={watch}
-                                errors={errors}
-                                serviceFrequencyOptions={serviceFrequencyOptions}
-                                weekdayOptions={weekdayOptions}
-                                subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-                                subContractorData={subContractorData}
-                                itemsMap={itemsMap}
-                                serviceTypes={serviceTypes}
-                                subContractorContainers={subContractorContainers}
-                                itemsOptions={itemsOptions}
-                                handleSubcontractorSelected={handleSubcontractorSelected}
-                                SERVICE_TYPES={SERVICE_TYPES}
-                                serviceNoteRef={serviceNoteRef}
-                                KeepContainers={KeepContainers}
-                                setKeepContainers={setKeepContainers}
-                                serviceDurationOptions={serviceDurationOptions}
-                                transporterData={transporterData}
-                                currentUserId={user?.uid}
-                            />  
-							<SsrActionButtons
-    isReadOnly={false}
-    onCancel={() => {
-        setShowSSRForm(false);
-        resetFormForNewSSR();
-    }}
-    onSubmit={handleSendToSubcontractor}
-    currentSSRIndex={currentSSRIndex}
-    setCurrentSSRIndex={setCurrentSSRIndex}
-    sentSubcontractorRequests={sentSubcontractorRequests}
-/>
-						</div>
-					)}
-
-					<dialog id={`delete-SSR`} className="modal">
+					))}
+				</div>
+			)}
+			{showSSRFrom&&
+			<SsrFormComponent
+			isReadOnly={isReadOnly}
+		//ssrData={ssr}
+		serviceFrequencyOptions={serviceFrequencyOptions}
+		weekdayOptions={weekdayOptions}
+		subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+		subContractorData={subContractorData}
+		serviceTypes={serviceTypes}
+		serviceDurationOptions={serviceDurationOptions}
+		transporterData={transporterData}
+		currentUserId={user?.uid}
+		onCancel={oncancel}
+		currentSSRIndex={currentSSRIndex}
+		setCurrentSSRIndex={setCurrentSSRIndex}
+		user={user}
+		generatorData={generatorData}
+			/>
+			}
+			<div className="grid items-center justify-center relative">
+					{generatorData.transporterId == user?.uid && renderSSRButton()}
+					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
+				</div>
+				<dialog id={`delete-SSR`} className="modal">
 						<div className="modal-box">
 							<div>
 								<button
@@ -2000,13 +1963,6 @@ const SsrActionButtons = memo(
 							</div>
 						</div>
 					</dialog>
-				</>
-
-				<div className="grid items-center justify-center relative">
-					{generatorData.transporterId == user?.uid && renderSSRButton()}
-					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
-				</div>
-			</form>
 
 			<div className="py-5">
 				<div className="flex flex-col gap-2">
@@ -2074,7 +2030,7 @@ const SsrActionButtons = memo(
 					</div>
 				</div>
 			</div>
-			<form onSubmit={instructionHandleSubmit(instructionSubmitHandler)} className="grid gap-2">
+			{!isReadOnly&&<form onSubmit={instructionHandleSubmit(instructionSubmitHandler)} className="grid gap-2">
 				<div>
 					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC] mb-2">
 						Generator Service Instructions{" "}
@@ -2161,22 +2117,6 @@ const SsrActionButtons = memo(
 							{errors.serviceInstruction && (
 								<p className="text-red-500 text-sm mt-1">{errors.serviceInstruction.message}</p>
 							)}
-							{(showSSRFrom || activeSentSSRs.length > 0) && (
-								<Controller
-									name="octoConnectNote"
-									control={instructionControl}
-									render={({ field: { onChange, value } }) => (
-										<Textarea
-											value={value}
-											onChange={onChange}
-											isDisabled={isReadOnly}
-											label="OCTO Connect"
-											placeholder={"Contractor's Note"}
-										/>
-									)}
-								/>
-							)}
-							{errors.octoConnectNote && <p className="text-red-500 text-sm mt-1">{errors.octoConnectNote.message}</p>}
 						</div>
 					</div>
 				</div>
@@ -2189,7 +2129,7 @@ const SsrActionButtons = memo(
 						Save
 					</button>
 				</div>
-			</form>
+			</form>}
 			<GeneratorUpcomingServices generatorData={generatorData} transporterId={user?.uid} />
 			<GeneratorPreviousServices generatorData={generatorData} transporterId={user?.uid} />
 		</div>
@@ -2223,1257 +2163,3 @@ function calculateUpcomingDates(schedule) {
 	}
 	return [];
 }
-
-
-
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Controller, useForm } from "react-hook-form";
-import { HiOutlineChevronDown, HiOutlineChevronUp } from "react-icons/hi";
-import SearchableDropdownForParents from "../../../../../../../../../components/UI/dropdowns/SearchableDropdownForParents";
-import MultiSelectRounded from "../../../../../../../../../components/UI/dropdowns/MultiSelectRounded";
-import Textarea from "../../../../../../../../../components/UI/Textarea";
-import CustomDatePicker from "../../../../../../../../../components/UI/CustomDatePicker";
-import Dropdown from "../../../../../../../../../components/UI/dropdowns/Dropdown";
-import { capitalizeFirstLetter, dateFormatter } from "../../../../../../../../../utils/helpers";
-import { SERVICE_STATUS } from "../../../../../../../../../utils/constants";
-
-const SsrFormComponent = memo(({
-    isReadOnly,
-    ssrData,
-    control,
-    trigger,
-    setValue,
-    getValues,
-    watch,
-    errors,
-    serviceFrequencyOptions,
-    weekdayOptions,
-    subcontractorServiveFrequencyOptions,
-    subContractorData,
-    itemsMap,
-    serviceTypes,
-    subContractorContainers,
-    itemsOptions,
-    handleSubcontractorSelected,
-    SERVICE_TYPES,
-    serviceNoteRef,
-    KeepContainers,
-    setKeepContainers,
-    serviceDurationOptions,
-    transporterData,
-    currentUserId,
-}) => {
-    // State to track local form values for immediate UI feedback
-    const [localFormState, setLocalFormState] = useState({
-        selectedSubContractor: null,
-        serviceFrequency: {
-            type: "",
-            days: [],
-        },
-        requestedStartDate: null,
-        serviceType: "",
-        serviceDuration: "15",
-        expectedItemOrService: [],
-        serviceNote: "",
-    });
-
-    // Watch form values for changes
-    const watchedSelectedSubContractor = watch("selectedSubContractor");
-    const watchedFrequencyType = watch("serviceSchedules.serviceFrequency.type");
-    const watchedFrequencyDays = watch("serviceSchedules.serviceFrequency.days");
-    const watchedStartDate = watch("requestedStartDate");
-    const watchedServiceType = watch("serviceSchedules.serviceType");
-    const watchedServiceDuration = watch("serviceSchedules.serviceDuration");
-    const watchedExpectedItems = watch("serviceSchedules.expectedItemOrService");
-    const watchedServiceNote = watch("serviceNote");
-
-    // Memoized update function for local state
-    const updateLocalState = useCallback(() => {
-        if (!isReadOnly) {
-            setLocalFormState({
-                selectedSubContractor: watchedSelectedSubContractor,
-                serviceFrequency: {
-                    type: watchedFrequencyType || "",
-                    days: watchedFrequencyDays || [],
-                },
-                requestedStartDate: watchedStartDate,
-                serviceType: watchedServiceType || "",
-                serviceDuration: watchedServiceDuration || "15",
-                expectedItemOrService: watchedExpectedItems || [],
-                serviceNote: watchedServiceNote || "",
-            });
-        }
-    }, [
-        isReadOnly,
-        watchedSelectedSubContractor,
-        watchedFrequencyType,
-        watchedFrequencyDays,
-        watchedStartDate,
-        watchedServiceType,
-        watchedServiceDuration,
-        watchedExpectedItems,
-        watchedServiceNote,
-    ]);
-
-    // Update local state when form values change
-    useEffect(() => {
-        updateLocalState();
-    }, [updateLocalState]);
-
-    // Initialize local form state from received SSR data
-    useEffect(() => {
-        if (isReadOnly && ssrData) {
-            const isReceived = ssrData.subcontractorId === currentUserId;
-
-            setLocalFormState({
-                selectedSubContractor: {
-                    id: isReceived ? currentUserId : ssrData.subcontractorId,
-                    Cname: isReceived ? transporterData?.companyName : ssrData.subContractorName,
-                },
-                serviceFrequency: {
-                    type: ssrData.serviceFrequency || "",
-                    days: ssrData.weekdays || [],
-                },
-                requestedStartDate: ssrData.requestedStartDate || null,
-                serviceType: ssrData.serviceType || "",
-                serviceDuration: ssrData.serviceDuration || "15",
-                expectedItemOrService: ssrData.expectedItemsOrServices || [],
-                serviceNote: ssrData.serviceNote || "",
-                isReceivedSSR: isReceived,
-                serviceStatus: ssrData.status,
-                cancelNote: ssrData.cancelReason,
-            });
-        }
-    }, [isReadOnly, ssrData, currentUserId, transporterData]);
-
-    // Cached dropdown options
-    const formattedSubcontractorOptions = useMemo(() => {
-        return subContractorData
-            ?.filter((subContractor) => subContractor.contractorName || subContractor.name)
-            .map((subContractor) => ({
-                label: `${subContractor.transporterOctoId} , ${subContractor.contractorName || subContractor.name || "--"}`,
-                value: JSON.stringify({
-                    id: subContractor.contractorDocid || subContractor.id,
-                    Cname: subContractor.contractorName || subContractor.name || "--",
-                }),
-            }));
-    }, [subContractorData]);
-
-    // Group containers by waste type (memoized)
-    const groupedContainerOptions = useMemo(() => {
-        const containers = (subContractorContainers.length > 0 ? subContractorContainers : itemsOptions).filter((item) =>
-            localFormState.serviceType === SERVICE_TYPES.MEDICAL_WASTE
-                ? item.subWasteType !== "Paper Shredding"
-                : item.subWasteType === "Paper Shredding"
-        );
-        
-        return groupContainersBySubWasteType(containers);
-    }, [subContractorContainers, itemsOptions, localFormState.serviceType, SERVICE_TYPES.MEDICAL_WASTE]);
-
-    // Helper function for containers
-    function groupContainersBySubWasteType(containers) {
-        const groupedContainers = {};
-
-        containers.forEach((container) => {
-            const subWasteType = container.subWasteType;
-            if (!groupedContainers[subWasteType]) {
-                groupedContainers[subWasteType] = [];
-            }
-            groupedContainers[subWasteType].push(container);
-        });
-
-        const result = [];
-
-        Object.keys(groupedContainers)
-            .sort()
-            .forEach((subWasteType) => {
-                result.push({
-                    label: `${subWasteType}`,
-                    value: subWasteType,
-                    isDisabled: true,
-                    isHeader: true,
-                });
-
-                groupedContainers[subWasteType].forEach((container) => {
-                    result.push({
-                        label: container.label,
-                        value: container.value,
-                    });
-                });
-            });
-
-        return result;
-    }
-
-    // For received SSR, render a different UI
-    if (isReadOnly && ssrData && ssrData.subcontractorId === currentUserId) {
-        const ReadOnlySsrView = () => {
-            const getServiceFrequencyLabel = useCallback((value) => {
-                const option = serviceFrequencyOptions.find((opt) => opt.value === value);
-                return option ? option.label : value;
-            }, [serviceFrequencyOptions]);
-
-            const getServiceTypeLabel = useCallback((value) => {
-                const option = serviceTypes.find((opt) => opt.value === value);
-                return option ? (option.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : option.label) : value;
-            }, [serviceTypes]);
-
-            const getServiceDurationLabel = useCallback((value) => {
-                const option = serviceDurationOptions.find((opt) => opt.value === value);
-                return option ? option.label : value;
-            }, [serviceDurationOptions]);
-
-            return (
-                <div className="pb-4">
-                    <div
-                        className="border-4 p-6 border-[transparent]"
-                        style={{ borderImage: "linear-gradient(135deg, #007AFF 0%, #4CD964 100%) 1" }}
-                    >
-                        <div className="grid grid-cols-2 gap-6">
-                            <div className="space-y-4">
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Contractor: </div>
-                                    <div className="text-md mb-1">{ssrData.transporterName || "N/A"}</div>
-                                </div>
-
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Service Frequency: </div>
-                                    <span className="text-md mb-1">{getServiceFrequencyLabel(localFormState.serviceFrequency.type)}</span>
-                                </div>
-
-                                {localFormState.serviceFrequency.type === "MTWM" && (
-                                    <div className="flex gap-2">
-                                        <div className="font-medium">Selected Weekdays:</div>
-                                        <div className="text-md mb-1">
-                                            {localFormState.serviceFrequency.days && localFormState.serviceFrequency.days.length > 0
-                                                ? localFormState.serviceFrequency.days
-                                                    .map((day) => {
-                                                        const dayOption = weekdayOptions.find((opt) => opt.value === day);
-                                                        return dayOption ? dayOption.label : day;
-                                                    })
-                                                    .join(", ")
-                                                : "No weekdays selected"}
-                                        </div>
-                                    </div>
-                                )}
-
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Requested Start Date:</div>
-                                    <div className="text-md mb-1">
-                                        {localFormState.requestedStartDate
-                                            ? dateFormatter(localFormState.requestedStartDate)
-                                            : "Not specified"}
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Service Note:</div>
-                                    <div className="text-md mb-1 whitespace-pre-wrap">{localFormState.serviceNote || "N/A"}</div>
-                                </div>
-                            </div>
-
-                            <div className="space-y-4">
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Service Type :</div>
-                                    <div className="text-md mb-1">{getServiceTypeLabel(localFormState.serviceType)}</div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Service Duration:</div>
-                                    <div className="text-md mb-1">{getServiceDurationLabel(localFormState.serviceDuration)}</div>
-                                </div>
-
-                                <div className="flex gap-2">
-                                    <div className="font-medium">Expected Containers:</div>
-                                    {localFormState.expectedItemOrService && localFormState.expectedItemOrService.length > 0 ? (
-                                        <div>
-                                            {localFormState.expectedItemOrService.map((itemObj, index) => (
-                                                <div key={index} className="flex justify-between items-center">
-                                                    <span className="text-md ">({itemObj.quantity || 1})</span>
-                                                    <span className="text-md ml-1">{itemsMap?.[itemObj.item] || itemObj.item}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="text-gray-500">No containers specified</div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        return <ReadOnlySsrView />;
-    }
-
-    // Event handlers (defined with useCallback to prevent recreating them)
-    const handleSubcontractorChange = useCallback((selectedValue) => {
-        if (isReadOnly) return;
-
-        const selectedSubcontractor = JSON.parse(selectedValue);
-
-        // Update form state
-        setValue("selectedSubContractor", selectedSubcontractor);
-        trigger("selectedSubContractor");
-        setValue("serviceSchedules.expectedItemOrService", []);
-
-        // Also update local state for immediate UI feedback
-        setLocalFormState((prev) => ({
-            ...prev,
-            selectedSubContractor: selectedSubcontractor,
-            expectedItemOrService: [],
-        }));
-
-        handleSubcontractorSelected(selectedSubcontractor.id);
-    }, [isReadOnly, setValue, trigger, handleSubcontractorSelected]);
-
-    const handleFrequencyChange = useCallback((value) => {
-        if (isReadOnly) return;
-
-        setValue("serviceSchedules.serviceFrequency.type", value);
-        trigger("serviceSchedules.serviceFrequency.type");
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            serviceFrequency: {
-                ...prev.serviceFrequency,
-                type: value,
-            },
-        }));
-    }, [isReadOnly, setValue, trigger]);
-
-    const handleWeekdaysChange = useCallback((selectedDays) => {
-        if (isReadOnly) return;
-
-        setValue("serviceSchedules.serviceFrequency.days", selectedDays);
-        trigger("serviceSchedules.serviceFrequency.days");
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            serviceFrequency: {
-                ...prev.serviceFrequency,
-                days: selectedDays,
-            },
-        }));
-    }, [isReadOnly, setValue, trigger]);
-
-    const handleStartDateChange = useCallback((value) => {
-        if (isReadOnly) return;
-
-        setValue("requestedStartDate", value);
-        trigger("requestedStartDate");
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            requestedStartDate: value,
-        }));
-    }, [isReadOnly, setValue, trigger]);
-
-    const handleServiceNoteChange = useCallback((e) => {
-        if (isReadOnly) return;
-
-        const value = e.target.value;
-        setValue("serviceNote", value);
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            serviceNote: value,
-        }));
-    }, [isReadOnly, setValue]);
-
-    const handleServiceTypeChange = useCallback((value) => {
-        if (isReadOnly) return;
-
-        const prevValue = localFormState.serviceType;
-        const shouldKeepContainers =
-            (value === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
-            (value === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
-            (value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
-            (value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING);
-
-        setValue("serviceSchedules.serviceType", value);
-        trigger("serviceSchedules.serviceType");
-
-        let newExpectedItems = shouldKeepContainers ? localFormState.expectedItemOrService : [];
-
-        if (!shouldKeepContainers) {
-            setValue("serviceSchedules.expectedItemOrService", []);
-            trigger("serviceSchedules.expectedItemOrService");
-        }
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            serviceType: value,
-            expectedItemOrService: newExpectedItems,
-        }));
-
-        setKeepContainers(shouldKeepContainers);
-    }, [isReadOnly, setValue, trigger, localFormState, SERVICE_TYPES, setKeepContainers]);
-
-    const handleServiceDurationChange = useCallback((value) => {
-        if (isReadOnly) return;
-
-        setValue("serviceSchedules.serviceDuration", value);
-        trigger("serviceSchedules.serviceDuration");
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            serviceDuration: value,
-        }));
-    }, [isReadOnly, setValue, trigger]);
-
-    const handleContainerSelect = useCallback((selectedItems) => {
-        if (isReadOnly) return;
-
-        const transformedItems = selectedItems.map((item) => {
-            const existingItem = localFormState.expectedItemOrService.find((v) => v.item === item);
-            return {
-                item,
-                quantity: existingItem?.quantity ?? 1,
-            };
-        });
-
-        setValue("serviceSchedules.expectedItemOrService", transformedItems);
-        trigger("serviceSchedules.expectedItemOrService");
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            expectedItemOrService: transformedItems,
-        }));
-    }, [isReadOnly, setValue, trigger, localFormState.expectedItemOrService]);
-
-    const handleQuantityChange = useCallback((itemObj, itemIndex, newQuantity) => {
-        if (isReadOnly && !KeepContainers) return;
-
-        const updatedItems = [...localFormState.expectedItemOrService];
-        updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
-
-        setValue("serviceSchedules.expectedItemOrService", updatedItems);
-        trigger("serviceSchedules.expectedItemOrService");
-
-        setLocalFormState((prev) => ({
-            ...prev,
-            expectedItemOrService: updatedItems,
-        }));
-    }, [isReadOnly, KeepContainers, setValue, trigger, localFormState.expectedItemOrService]);
-
-    // Check if subcontractor is selected
-    const hasSubcontractorSelected = localFormState.selectedSubContractor != null;
-
-    // Return the standard SSR form for creating/editing
-    return (
-        <div className="pb-4">
-            <div className="flex gap-8 w-full">
-                <div className="w-1/2 space-y-4">
-                    <div className="w-full relative">
-                        <SearchableDropdownForParents
-                            label={"Subcontractor"}
-                            options={formattedSubcontractorOptions}
-                            value={localFormState.selectedSubContractor ? JSON.stringify(localFormState.selectedSubContractor) : ""}
-                            onChange={handleSubcontractorChange}
-                            isRequired
-                            listHeight="max-h-64"
-                            isDisabled={isReadOnly}
-                        />
-                        {!isReadOnly && errors.selectedSubContractor && (
-                            <p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
-                        )}
-                    </div>
-
-                    <Dropdown
-                        label="Service Frequency"
-                        options={subcontractorServiveFrequencyOptions}
-                        value={localFormState.serviceFrequency.type}
-                        onChange={handleFrequencyChange}
-                        isRequired
-                        listHeight="max-h-64"
-                        isDisabled={isReadOnly || !hasSubcontractorSelected}
-                    />
-                    {!isReadOnly && errors.serviceSchedules?.serviceFrequency?.type && (
-                        <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceFrequency.type.message}</p>
-                    )}
-
-                    {localFormState.serviceFrequency.type === "MTWM" && (
-                        <div className="w-full mt-2">
-                            <div className="w-full flex">
-                                <p className="w-1/3 whitespace-nowrap truncate text-cardTextGray">
-                                    {isReadOnly ? "Selected Weekdays:" : "Select Weekdays *"}
-                                </p>
-                                <div className="w-2/3">
-                                    {isReadOnly ? (
-                                        <div className="bg-gray-100 p-2 rounded-full px-4 text-cardTextGray">
-                                            {localFormState.serviceFrequency.days && localFormState.serviceFrequency.days.length > 0
-                                                ? localFormState.serviceFrequency.days
-                                                    .map((day) => {
-                                                        const dayOption = weekdayOptions.find((opt) => opt.value === day);
-                                                        return dayOption ? dayOption.label : day;
-                                                    })
-                                                    .join(", ")
-                                                : "No weekdays selected"}
-                                        </div>
-                                    ) : (
-                                        <MultiSelectRounded
-                                            value={localFormState.serviceFrequency.days}
-                                            onChange={handleWeekdaysChange}
-                                            options={weekdayOptions}
-                                            id={`ssr-weekdays-input`}
-                                            styles="flex flex-col w-full gap-1"
-                                            margin="0"
-                                            isDisabled={isReadOnly || !hasSubcontractorSelected}
-                                        />
-                                    )}
-                                </div>
-                            </div>
-                            {!isReadOnly && errors.serviceSchedules?.serviceFrequency?.days && (
-                                <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceFrequency.days.message}</p>
-                            )}
-                        </div>
-                    )}
-
-                    <div className="flex items-center justify-between my-4">
-                        <label htmlFor="requestedStartDate" className="truncate text-inputLabel font-normal">
-                            Requested Start Date {!isReadOnly && "*"}
-                        </label>
-                        <div className="w-2/3">
-                            {isReadOnly ? (
-                                <div className="bg-gray-100 p-2 rounded-full px-4 text-cardTextGray">
-                                    {localFormState.requestedStartDate
-                                        ? dateFormatter(localFormState.requestedStartDate)
-                                        : "Not specified"}
-                                </div>
-                            ) : (
-                                <CustomDatePicker
-                                    selectedDate={localFormState.requestedStartDate}
-                                    setSelectedDate={handleStartDateChange}
-                                    label={"Requested Start Date *"}
-                                    startYear={new Date().getFullYear()}
-                                    endYear={new Date().getFullYear() + 5}
-                                    yearReversed={true}
-                                    minDate={new Date()}
-                                    isDisabled={isReadOnly || !hasSubcontractorSelected}
-                                />
-                            )}
-                        </div>
-                    </div>
-                    {!isReadOnly && errors.requestedStartDate && (
-                        <p className="text-red-500 text-sm mt-1">{errors.requestedStartDate.message}</p>
-                    )}
-
-                    <div className="w-full">
-                        <Textarea
-                            ref={serviceNoteRef}
-                            value={localFormState.serviceNote || ""}
-                            onChange={handleServiceNoteChange}
-                            label="Service Note To Subcontractor"
-                            isDisabled={isReadOnly}
-                        />
-                    </div>
-
-                    {isReadOnly && localFormState.serviceStatus && (
-                        <div>
-                            <div className="flex gap-40">
-                                <div className="text-cardTextGray">Service Status :</div>
-                                <div className="text-md mb-1">{capitalizeFirstLetter(localFormState.serviceStatus)}</div>
-                            </div>
-                            {localFormState.serviceStatus === SERVICE_STATUS.DECLINED && localFormState.cancelNote && (
-                                <Textarea
-                                    value={capitalizeFirstLetter(localFormState.cancelNote)}
-                                    onChange={() => {}}
-                                    label="Decline Reason:"
-                                    isDisabled={true}
-                                />
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                <div className="w-1/2 space-y-4">
-                    <Dropdown
-                        label="Service Type"
-                        options={serviceTypes.map((item) => ({
-                            label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
-                            value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
-                            isDisabled: item.value === "HAZARDOUS_WASTE",
-                        }))}
-                        disabledBgColor="white"
-                        disabledTextColor="gray-300"
-                        value={localFormState.serviceType}
-                        onChange={handleServiceTypeChange}
-                        isRequired
-                        isDisabled={isReadOnly || !hasSubcontractorSelected}
-                    />
-                    {!isReadOnly && errors.serviceSchedules?.serviceType && (
-                        <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
-                    )}
-
-                    <Dropdown
-                        label="Service Duration"
-                        options={serviceDurationOptions}
-                        value={localFormState.serviceDuration}
-                        onChange={handleServiceDurationChange}
-                        isRequired
-                        isDisabled={isReadOnly || !hasSubcontractorSelected}
-                    />
-                    {!isReadOnly && errors.serviceSchedules?.serviceDuration && (
-                        <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceDuration.message}</p>
-                    )}
-
-                    <div className="w-full flex flex-col gap-4">
-                        <div className="w-full flex">
-                            <p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">Expected Container(s) *</p>
-                            <div className="w-2/3">
-                                <MultiSelectRounded
-                                    isDisabled={isReadOnly || (!isReadOnly && !localFormState.serviceType) || !hasSubcontractorSelected}
-                                    value={localFormState.expectedItemOrService.map((v) => v.item)}
-                                    onChange={handleContainerSelect}
-                                    options={groupedContainerOptions}
-                                    isRequired={true}
-                                    id="expected-items-services-ssr"
-                                    styles="flex flex-col w-full gap-1 min-h-9"
-                                    margin="0"
-                                />
-                            </div>
-                        </div>
-
-                        {!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
-                            <p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
-                        )}
-
-                        {localFormState.expectedItemOrService?.length > 0 && (
-                            <div className="mb-4 flex flex-col gap-4">
-                                {localFormState.expectedItemOrService.map((itemObj, itemIndex) => (
-                                    <div key={itemObj.item} className="flex items-center">
-                                        <span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
-                                            {itemsMap?.[itemObj.item]?.length > 40 ? itemsMap?.[itemObj.item] : itemsMap?.[itemObj.item]}
-                                        </span>
-                                        <div className="relative w-2/3">
-                                            <input
-                                                min="1"
-                                                max="999"
-                                                value={itemObj.quantity || 1}
-                                                onChange={(e) => {
-                                                    const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
-                                                    handleQuantityChange(itemObj, itemIndex, newQuantity);
-                                                }}
-                                                disabled={isReadOnly || !hasSubcontractorSelected}
-                                                className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
-                                            />
-
-                                            {!isReadOnly && hasSubcontractorSelected && (
-                                                <>
-                                                    {/* Increase Button (Up Arrow) */}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            const newQuantity = Math.min((itemObj.quantity || 1) + 1, 999);
-                                                            handleQuantityChange(itemObj, itemIndex, newQuantity);
-                                                        }}
-                                                        className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
-                                                    >
-                                                        <HiOutlineChevronUp className="w-4 h-4" />
-                                                    </button>
-
-                                                    {/* Decrease Button (Down Arrow) */}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            const newQuantity = Math.max((itemObj.quantity || 1) - 1, 1);
-                                                            handleQuantityChange(itemObj, itemIndex, newQuantity);
-                                                        }}
-                                                        className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
-                                                    >
-                                                        <HiOutlineChevronDown className="w-4 h-4" />
-                                                    </button>
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-});
-
-export default SsrFormComponent;
-
-
-import { useState, useEffect, useCallback } from 'react';
-import { 
-    collection, doc, getDoc, getDocs, 
-    onSnapshot, query, where, writeBatch 
-} from 'firebase/firestore';
-import { COLLECTIONS, db } from '../config/firebase';
-import { showErrorToastMessage, showSuccessToastMessage } from './helpers';
-
-
-// CONTAINERS HOOK
-export const useContainers = (initialTransporterId) => {
-    const [itemsOptions, setItemsOptions] = useState([]);
-    const [itemsMap, setItemsMap] = useState({});
-    const [subContractorContainers, setSubContractorContainers] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-
-    // Fetch containers for a specific transporter
-    const fetchContainers = useCallback(async (transporterId) => {
-        if (!transporterId) {
-            console.log("No transporter ID provided");
-            return [];
-        }
-
-        try {
-            return new Promise((resolve, reject) => {
-                const unsubscribe = onSnapshot(
-                    collection(db, "priceBooks", transporterId, "default", "services", "containers"),
-                    (snap) => {
-                        let tempOptions = [];
-                        let tempMap = {};
-
-                        if (snap.docs.length) {
-                            snap.docs.forEach((el) => {
-                                tempOptions.push({
-                                    label: el.data()?.masterItemName ?? "--",
-                                    value: el.id,
-                                    subWasteType: el.data()?.subWasteType,
-                                });
-                                tempMap[el.id] = el.data()?.masterItemName ?? "--";
-                            });
-
-                            setItemsMap((prevMap) => ({ ...prevMap, ...tempMap }));
-                        } else {
-                            console.log(`No containers found for transporter: ${transporterId}`);
-                        }
-                        unsubscribe();
-                        resolve(tempOptions);
-                    },
-                    (error) => {
-                        console.error("Error fetching containers:", error);
-                        unsubscribe();
-                        reject(error);
-                    }
-                );
-            });
-        } catch (error) {
-            console.error("Error setting up container listener:", error);
-            return [];
-        }
-    }, []);
-
-    // Handle subcontractor selection
-    const handleSubcontractorSelected = useCallback(async (subcontractorId) => {
-        if (!subcontractorId) {
-            setSubContractorContainers([]);
-            return;
-        }
-
-        try {
-            const containers = await fetchContainers(subcontractorId);
-            setSubContractorContainers(containers);
-        } catch (error) {
-            console.error("Failed to fetch subcontractor containers:", error);
-            setSubContractorContainers([]);
-        }
-    }, [fetchContainers]);
-
-    // Initial load of transporter containers
-    useEffect(() => {
-        if (initialTransporterId) {
-            setIsLoading(true);
-            const loadTransporterContainers = async () => {
-                try {
-                    const containers = await fetchContainers(initialTransporterId);
-                    setItemsOptions(containers);
-                    setIsLoading(false);
-                } catch (error) {
-                    console.error("Failed to load initial containers:", error);
-                    setIsLoading(false);
-                }
-            };
-
-            loadTransporterContainers();
-        }
-    }, [initialTransporterId, fetchContainers]);
-
-    return {
-        itemsOptions,
-        itemsMap,
-        subContractorContainers,
-        isLoading,
-        fetchContainers,
-        handleSubcontractorSelected
-    };
-};
-
-// SUBCONTRACTORS HOOK
-export const useSubcontractors = (userId) => {
-    const [subContractorData, setSubContractorData] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [isOctoMarketUser, setIsOctoMarketUser] = useState(false);
-
-    const formatAddress = (transporter) => {
-        let formattedAdd = "";
-        transporter.billingAddress?.street?.trim()?.length
-            ? (formattedAdd += transporter.billingAddress?.street)
-            : (formattedAdd = "");
-        transporter.billingAddress?.suite?.trim()?.length && formattedAdd?.length
-            ? (formattedAdd += `, ${transporter.billingAddress?.suite}`)
-            : (formattedAdd += transporter.billingAddress?.suite ?? "");
-        transporter.billingAddress?.city?.trim()?.length && formattedAdd?.length
-            ? (formattedAdd += `, ${transporter.billingAddress?.city}`)
-            : (formattedAdd += transporter.billingAddress?.city ?? "");
-        transporter.billingAddress?.state?.trim()?.length && formattedAdd?.length
-            ? (formattedAdd += `, ${transporter.billingAddress?.state}`)
-            : (formattedAdd += transporter.billingAddress?.state ?? "");
-        transporter.billingAddress?.zipCode?.trim()?.length && formattedAdd?.length
-            ? (formattedAdd += ` ${transporter.billingAddress?.zipCode}`)
-            : (formattedAdd += transporter.billingAddress?.zipCode ?? "");
-
-        return formattedAdd.length ? formattedAdd : "--";
-    };
-
-    const fetchContractorData = useCallback(async () => {
-        if (!userId) {
-            setIsLoading(false);
-            return [];
-        }
-
-        setIsLoading(true);
-        try {
-            const transporterDoc = await getDoc(doc(db, COLLECTIONS.transporters, userId));
-            const transporterMarketDoc = await getDoc(doc(db, COLLECTIONS.octoMarketUsers, userId));
-
-            if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
-                console.log("No such transporter!");
-                setIsLoading(false);
-                return [];
-            }
-
-            setIsOctoMarketUser(true);
-
-            const data = transporterDoc.data();
-            const transporterMarketData = transporterMarketDoc.data();
-
-            if (!transporterMarketData) {
-                setIsLoading(false);
-                return [];
-            }
-
-            const contractorRelationships = transporterMarketData.connections || {};
-            const acceptedRelationships = Object.entries(contractorRelationships).filter(
-                ([_, relationship]) => relationship.status === "accepted"
-            );
-            
-            const contractorPromises = acceptedRelationships.map(async ([contractorId, relationship]) => {
-                const contractorDoc = await getDoc(doc(db, COLLECTIONS.transporters, contractorId));
-
-                if (!contractorDoc.exists()) return null;
-
-                const contractorData = contractorDoc.data();
-                return {
-                    id: contractorId,
-                    contractorDocid: contractorDoc.id,
-                    contractorName: contractorData.companyName ?? "--",
-                    address: formatAddress(contractorData),
-                    generalEmail: contractorData.generalEmail?.length > 0 ? contractorData.generalEmail : "--",
-                    phoneNumber: contractorData.phoneNumber ?? "--",
-                    website: contractorData.website?.length ? contractorData.website : "--",
-                    sharedGenerators: contractorData.allGens?.length ?? 0,
-                    startDate: relationship.startDate,
-                    status: relationship.status,
-                    transporterOctoId: contractorData.transporterOctoId,
-                };
-            });
-
-            const contractors = await Promise.all(contractorPromises);
-            const filteredContractors = contractors.filter(Boolean);
-            setSubContractorData(filteredContractors);
-            setIsLoading(false);
-            return filteredContractors;
-        } catch (error) {
-            console.error("Error fetching contractor data:", error);
-            setIsLoading(false);
-            return [];
-        }
-    }, [userId]);
-
-    useEffect(() => {
-        if (userId) {
-            fetchContractorData();
-        }
-    }, [userId, fetchContractorData]);
-
-    return {
-        subContractorData,
-        isLoading,
-        isOctoMarketUser,
-        fetchContractorData
-    };
-};
-
-// SSR REQUESTS HOOK
-export const useSsrRequests = (userId, generatorId) => {
-    const [sentSubcontractorRequests, setSentSubcontractorRequests] = useState([]);
-    const [activeSentSSRs, setActiveSentSSRs] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-
-    // Fetch subcontractor requests
-    const fetchSentSubcontractorRequests = useCallback(async () => {
-        if (!userId || !generatorId) {
-            setIsLoading(false);
-            return;
-        }
-
-        try {
-            setIsLoading(true);
-            const currentTransporterRef = doc(db, COLLECTIONS.transporters, userId);
-            const transporterDoc = await getDoc(currentTransporterRef);
-
-            if (transporterDoc.exists()) {
-                const transporterData = transporterDoc.data();
-                const sentRequests = transporterData.sharedGenerators?.fromMe || [];
-                const filteredSentRequests = sentRequests
-                    .filter((req) => req.genId === generatorId)
-                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-                    
-                const receivedRequests = transporterData.sharedGenerators?.toMe || [];
-                const filteredReceivedRequests = receivedRequests
-                    .filter((req) => req.genId === generatorId && req.status === 'ACCEPTED')
-                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-                    
-                setSentSubcontractorRequests(filteredSentRequests);
-                const activeSent = filteredSentRequests.filter((req) => req.status !== 'CANCELLED');
-                const combinedRequests = [...activeSent, ...filteredReceivedRequests];
-                setActiveSentSSRs(combinedRequests);
-            }
-            setIsLoading(false);
-        } catch (error) {
-            console.error("Error fetching subcontractor requests:", error);
-            setIsLoading(false);
-        }
-    }, [userId, generatorId]);
-// Cancel a subcontractor request
-const cancelSubcontractorRequest = useCallback(async (ssrToCancel, cancelReason) => {
-    // Validate inputs
-    if (!cancelReason || cancelReason.trim() === "") {
-        console.error("Missing cancellation reason");
-        showErrorToastMessage("Cancellation note is required.");
-        return false;
-    }
-
-    if (!ssrToCancel || !ssrToCancel.ssrId) {
-        console.error("Invalid SSR to cancel:", ssrToCancel);
-        showErrorToastMessage("Cannot identify the SSR to cancel");
-        return false;
-    }
-
-    try {
-        console.log("Cancelling SSR:", ssrToCancel.ssrId);
-        
-        const batch = writeBatch(db);
-        const currentTransporterRef = doc(db, COLLECTIONS.transporters, userId);
-        const transporterDoc = await getDoc(currentTransporterRef);
-        const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
-        const subcontractorDoc = await getDoc(subcontractorRef);
-
-        const cancellationData = {
-            status: 'CANCELLED',
-            cancelReason: cancelReason,
-            cancelledAt: new Date().toISOString(),
-        };
-
-        let updatedFirestore = false;
-
-        // Update in current transporter's sharedGenerators.fromMe
-        if (transporterDoc.exists()) {
-            const transporterData = transporterDoc.data();
-            let sharedGenerators = transporterData.sharedGenerators || {};
-
-            if (sharedGenerators.fromMe && sharedGenerators.fromMe.length) {
-                const requestIndex = sharedGenerators.fromMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
-                console.log("Found request index in fromMe:", requestIndex);
-
-                if (requestIndex !== -1) {
-                    sharedGenerators.fromMe[requestIndex] = {
-                        ...sharedGenerators.fromMe[requestIndex],
-                        ...cancellationData,
-                    };
-
-                    batch.update(currentTransporterRef, { sharedGenerators });
-                    updatedFirestore = true;
-                }
-            }
-        }
-
-        // Update in subcontractor's sharedGenerators.toMe
-        if (subcontractorDoc.exists()) {
-            const subcontractorData = subcontractorDoc.data();
-            let subSharedGenerators = subcontractorData.sharedGenerators || {};
-
-            if (subSharedGenerators.toMe && subSharedGenerators.toMe.length) {
-                const subRequestIndex = subSharedGenerators.toMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
-                console.log("Found request index in toMe:", subRequestIndex);
-
-                if (subRequestIndex !== -1) {
-                    subSharedGenerators.toMe[subRequestIndex] = {
-                        ...subSharedGenerators.toMe[subRequestIndex],
-                        ...cancellationData,
-                    };
-
-                    batch.update(subcontractorRef, { sharedGenerators: subSharedGenerators });
-                    updatedFirestore = true;
-                }
-            }
-        }
-
-        // Update generator if needed
-        const generatorId = ssrToCancel.genId;
-        if (generatorId) {
-            const generatorRef = doc(db, COLLECTIONS.generators, generatorId);
-            const generatorDoc = await getDoc(generatorRef);
-
-            if (generatorDoc.exists()) {
-                const generatorData = generatorDoc.data();
-                const existingSubcontractors = generatorData.subContractors || [];
-                
-                // Make sure we're comparing strings if needed
-                const subContractorId = ssrToCancel.subcontractorId;
-                const remainingSubcontractors = existingSubcontractors
-                    .filter((sub) => String(sub.id) !== String(subContractorId));
-
-                console.log("Subcontractor to remove:", subContractorId);
-                console.log("Original subcontractors:", existingSubcontractors.length);
-                console.log("Remaining subcontractors:", remainingSubcontractors.length);
-
-                // Check if this is the only SSR for this generator-subcontractor pair
-                const filteredSSRforGen = activeSentSSRs.filter(
-                    (ssrs) => ssrs.genId === generatorId && 
-                              String(ssrs.subcontractorId) === String(subContractorId)
-                );
-                
-                if (filteredSSRforGen.length === 1) {
-                    console.log("This is the only SSR for this generator-subcontractor pair, updating generator");
-                    batch.update(generatorRef, {
-                        subContractors: remainingSubcontractors,
-                        isSubContracted: remainingSubcontractors.length > 0,
-                    });
-                    updatedFirestore = true;
-                }
-            }
-        }
-
-        if (!updatedFirestore) {
-            console.warn("No updates were made to Firestore");
-        }
-
-        // Commit the batch update
-        await batch.commit();
-        console.log("Firestore updates committed successfully");
-        
-        // Update local state - crucial for UI refresh
-        console.log("Updating local state with cancelled SSR");
-        
-        // For sent requests, update the status rather than removing
-        const updatedSentRequests = sentSubcontractorRequests.map((req) =>
-            req.ssrId === ssrToCancel.ssrId
-                ? {
-                    ...req,
-                    ...cancellationData,
-                  }
-                : req
-        );
-        
-        // For active requests, remove the cancelled one
-        const updatedActiveSSRs = activeSentSSRs.filter((ssr) => 
-            ssr.ssrId !== ssrToCancel.ssrId
-        );
-        
-        console.log("Original active SSRs count:", activeSentSSRs.length);
-        console.log("Updated active SSRs count:", updatedActiveSSRs.length);
-        
-        // Use a direct state update approach rather than a function update
-        // This ensures the component sees the state change immediately
-        setSentSubcontractorRequests(updatedSentRequests);
-        setActiveSentSSRs(updatedActiveSSRs);
-        
-        // Refresh data from the server to ensure UI is in sync
-        setTimeout(() => {
-            fetchSentSubcontractorRequests();
-        }, 500);
-        
-        showSuccessToastMessage("Subcontractor request cancelled successfully");
-        return true;
-        
-    } catch (error) {
-        console.error("Error cancelling SSR:", error, error.stack);
-        showErrorToastMessage("Error cancelling subcontractor request");
-        return false;
-    }
-}, [userId, sentSubcontractorRequests, activeSentSSRs, generatorId, fetchSentSubcontractorRequests]);
-
-    // Send a new subcontractor request
-     const sendSubcontractorRequest = useCallback(async (formData, transporterData, generatorData) => {
-        console.log("formdata",formData);
-        
-    if (!userId || !formData?.selectedSubContractor?.id) {
-        showErrorToastMessage("Missing required information");
-        return false;
-    }
-
-
-    
-    try {
-        const serviceDuration = formData.serviceSchedules?.serviceDuration || "15";
-        const weekdays =
-            formData.serviceSchedules?.serviceFrequency?.type === "MTWM"
-                ? formData.serviceSchedules?.serviceFrequency?.days || []
-                : [];
-
-        const serviceRequest = {
-            genId: generatorData?.id,
-            serviceFrequency: formData.serviceSchedules?.serviceFrequency?.type,
-            weekdays: weekdays,
-            serviceType: formData.serviceSchedules?.serviceType,
-            requestedStartDate: formData.requestedStartDate,
-            serviceDuration: serviceDuration,
-            expectedItemsOrServices: formData.serviceSchedules?.expectedItemOrService || [],
-            serviceNote: formData.serviceNote || "",
-            subcontractorId: formData.selectedSubContractor?.id,
-            subContractorName: formData.selectedSubContractor?.Cname,
-            status: 'PENDING',
-            createdAt: new Date().toISOString(),
-            timeStamp: new Date(),
-            ssrId: Date.now().toString(),
-            transporterName: transporterData?.companyName,
-            transporterId: userId,
-        };
-
-        const batch = writeBatch(db);
-
-        // Update subcontractor's shared generators
-        const transporterRef = doc(db, COLLECTIONS.transporters, formData.selectedSubContractor?.id);
-        const transporterDoc = await getDoc(transporterRef);
-
-        if (transporterDoc.exists()) {
-            let transporterData = transporterDoc.data();
-            let sharedGenerators = transporterData.sharedGenerators || {};
-            sharedGenerators.toMe = sharedGenerators.toMe || [];
-            sharedGenerators.toMe.push(serviceRequest);
-            batch.update(transporterRef, { sharedGenerators });
-        } else {
-            console.log("Transporter not found.");
-            return false;
-        }
-
-        // Update current transporter's shared generators
-        const currentTransporterRef = doc(db, COLLECTIONS.transporters, userId);
-        const currentransporterDoc = await getDoc(currentTransporterRef);
-
-        if (currentransporterDoc.exists()) {
-            let transporterData = currentransporterDoc.data();
-            let sharedGenerators = transporterData.sharedGenerators || {};
-
-            if (!sharedGenerators.fromMe) {
-                sharedGenerators.fromMe = [];
-            }
-
-            sharedGenerators.fromMe.push(serviceRequest);
-            batch.update(currentTransporterRef, { sharedGenerators });
-        } else {
-            console.log("Current transporter not found.");
-            return false;
-        }
-
-        // Add notification - FIXED CODE
-        const subcontractorId = formData.selectedSubContractor?.id;
-
-        // First, check if the notifications document exists
-        const subcontractorNotificationRef = doc(db, "notifications", subcontractorId);
-        const notificationDocSnapshot = await getDoc(subcontractorNotificationRef);
-
-        if (!notificationDocSnapshot.exists()) {
-            batch.set(subcontractorNotificationRef, {
-                created: new Date(),
-            });
-        }
-
-        const newNotification = {
-            id: Date.now().toString(),
-            topic: "New SSR Request",
-            type: "SSR_Request",
-            message: `A new Subcontractor Service Request has been received from ${transporterData?.companyName} for ${generatorData?.generatorName}`,
-            read: false,
-            timeStamp: new Date(),
-        };
-
-        const today = new Date();
-        const todayISOString = today.toISOString().split("T")[0] + "T00:00:00.000Z";
-        
-        // This is the correct way to reference the subcollection document
-        const dailyNotificationRef = doc(collection(subcontractorNotificationRef, "dailyNotifications"), todayISOString);
-        
-        const dailyNotificationDoc = await getDoc(dailyNotificationRef);
-
-        if (dailyNotificationDoc.exists()) {
-            const existingData = dailyNotificationDoc.data();
-            let notifications = Array.isArray(existingData.notifications) ? 
-                [...existingData.notifications] : [];
-
-            notifications.push(newNotification);
-            batch.update(dailyNotificationRef, { notifications });
-        } else {
-            batch.set(dailyNotificationRef, {
-                notifications: [newNotification],
-                dateCreated: new Date(),
-            });
-        }
-
-        await batch.commit();
-
-        // Update local state
-        setSentSubcontractorRequests((prev) => [serviceRequest, ...prev]);
-        setActiveSentSSRs((prev) => [serviceRequest, ...prev]);
-
-        showSuccessToastMessage(
-            `Subcontractor Service Request sent to ${formData.selectedSubContractor?.Cname} Successfully!`
-        );
-        return true;
-    } catch (error) {
-        console.error("Error sending request:", error);
-        showErrorToastMessage("Error sending request to subcontractor");
-        return false;
-    }
-}, [userId]);
-
-    // Initialize data fetch
-    useEffect(() => {
-        if (userId && generatorId) {
-            fetchSentSubcontractorRequests();
-        }
-    }, [userId, generatorId, fetchSentSubcontractorRequests]);
-
-    return {
-        sentSubcontractorRequests,
-        activeSentSSRs,
-        isLoading,
-        cancelSubcontractorRequest,
-        sendSubcontractorRequest,
-        fetchSentSubcontractorRequests
-    };
-};
-
-// You can export a combined hook if needed
-export const useSSRManagement = (userId, generatorId) => {
-    const containers = useContainers(userId);
-    const subcontractors = useSubcontractors(userId);
-    const ssrRequests = useSsrRequests(userId, generatorId);
-    
-    return {
-        ...containers,
-        ...subcontractors,
-        ...ssrRequests,
-        isLoading: containers.isLoading || subcontractors.isLoading || ssrRequests.isLoading
-    };
-};
