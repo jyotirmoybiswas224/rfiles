@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "react-toastify";
 import { BiPlus } from "react-icons/bi";
@@ -1199,6 +1199,16 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		});
 	};
 
+	const { fetchSentSubcontractorRequests } = useSSRManagement(user?.uid, generatorData?.id);
+
+	const handleSSRRequestSent = useCallback(async () => {
+		// Refresh the activeSentSSRs list
+		if (user?.uid && generatorData?.id) {
+			// If you have a direct function to fetch SSRs, call it here
+			await fetchSentSubcontractorRequests();
+		}
+	}, [user?.uid, generatorData?.id]);
+
 	const handleSendToSubcontractor = async () => {
 		if (!user || !user?.uid) return;
 
@@ -1861,150 +1871,121 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						</dialog>
 					</div>
 				))}
-
-				
-				
 			</form>
 			<>
-					{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
-						<div>
-							<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">
-								Subcontractor Service Requests (SSR)
-							</h6>
+				{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
+					<div>
+						<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Subcontractor Service Requests (SSR)</h6>
 
-							{activeSentSSRs.map((ssr, index) => (
-								<div key={ssr.ssrId || index} className="pb-4">
-									<SsrFormComponent
-										isReadOnly={true}
-										ssrData={ssr}
-										control={control}
-										trigger={trigger}
-										setValue={setValue}
-										getValues={getValues}
-										watch={watch}
-										errors={errors}
-										serviceFrequencyOptions={serviceFrequencyOptions}
-										weekdayOptions={weekdayOptions}
-										subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-										subContractorData={subContractorData}
-										itemsMap={itemsMap}
-										serviceTypes={serviceTypes}
-										subContractorContainers={subContractorContainers}
-										itemsOptions={itemsOptions}
-										handleSubcontractorSelected={handleSubcontractorSelected}
-										SERVICE_TYPES={SERVICE_TYPES}
-										serviceNoteRef={serviceNoteRef}
-										KeepContainers={KeepContainers}
-										setKeepContainers={setKeepContainers}
-										serviceDurationOptions={serviceDurationOptions}
-										transporterData={transporterData}
-										currentUserId={user?.uid}
-									/>
-									{!isReadOnly && (
-										<SsrActionButtons
-											isReadOnly={true}
-											ssr={ssr}
-											currentSSRIndex={sentSubcontractorRequests.findIndex((r) => r.ssrId === ssr.ssrId)}
-											setCurrentSSRIndex={setCurrentSSRIndex}
-											sentSubcontractorRequests={sentSubcontractorRequests}
-										/>
-									)}
-								</div>
-							))}
-						</div>
-					)}
-					{showSSRFrom && (
-						<div className="mb-8 pb-4">
-							<SsrFormComponent
-								isReadOnly={false}
-								ssrData={null}
-								control={control}
-								trigger={trigger}
-								setValue={setValue}
-								getValues={getValues}
-								watch={watch}
-								errors={errors}
-								serviceFrequencyOptions={serviceFrequencyOptions}
-								weekdayOptions={weekdayOptions}
-								subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-								subContractorData={subContractorData}
-								itemsMap={itemsMap}
-								serviceTypes={serviceTypes}
-								subContractorContainers={subContractorContainers}
-								itemsOptions={itemsOptions}
-								handleSubcontractorSelected={handleSubcontractorSelected}
-								SERVICE_TYPES={SERVICE_TYPES}
-								serviceNoteRef={serviceNoteRef}
-								KeepContainers={KeepContainers}
-								setKeepContainers={setKeepContainers}
-								serviceDurationOptions={serviceDurationOptions}
-								transporterData={transporterData}
-								currentUserId={user?.uid}
-							/>
-							<SsrActionButtons
-								isReadOnly={false}
-								onCancel={() => {
-									setShowSSRForm(false);
-									resetFormForNewSSR();
-								}}
-								onSubmit={handleSendToSubcontractor}
-								currentSSRIndex={currentSSRIndex}
-								setCurrentSSRIndex={setCurrentSSRIndex}
-								sentSubcontractorRequests={sentSubcontractorRequests}
-							/>
-						</div>
-					)}
-
-					<dialog id={`delete-SSR`} className="modal">
-						<div className="modal-box">
-							<div>
-								<button
-									className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-									type="button"
-									onClick={() => {
-										document.getElementById(`delete-SSR`).close();
-										setCancelReason("");
-									}}
-								>
-									✕
-								</button>
-							</div>
-							<h3 className="font-bold text-lg">Are You Sure ?</h3>
-							<div className="flex py-5 gap-5 flex-col">
-								<p className="">Proceeding with this operation will cancel the Subcontractor Service Request</p>
-								<p>Enter Note for Cancellation *</p>
-								<textarea
-									rows={3}
-									value={cancelReason}
-									onChange={(e) => setCancelReason(e.target.value)}
-									className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
+						{activeSentSSRs.map((ssr, index) => (
+							<div key={ssr.ssrId || index} className="pb-4">
+								<SsrFormComponent
+									isReadOnly={true}
+									ssrData={ssr}
+									control={control}
+									trigger={trigger}
+									setValue={setValue}
+									getValues={getValues}
+									watch={watch}
+									errors={errors}
+									serviceFrequencyOptions={serviceFrequencyOptions}
+									weekdayOptions={weekdayOptions}
+									subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+									subContractorData={subContractorData}
+									itemsMap={itemsMap}
+									serviceTypes={serviceTypes}
+									subContractorContainers={subContractorContainers}
+									itemsOptions={itemsOptions}
+									handleSubcontractorSelected={handleSubcontractorSelected}
+									SERVICE_TYPES={SERVICE_TYPES}
+									serviceNoteRef={serviceNoteRef}
+									KeepContainers={KeepContainers}
+									setKeepContainers={setKeepContainers}
+									serviceDurationOptions={serviceDurationOptions}
+									transporterData={transporterData}
+									currentUserId={user?.uid}
 								/>
+								{!isReadOnly && (
+									<SsrActionButtons
+										isReadOnly={true}
+										ssr={ssr}
+										currentSSRIndex={sentSubcontractorRequests.findIndex((r) => r.ssrId === ssr.ssrId)}
+										setCurrentSSRIndex={setCurrentSSRIndex}
+										sentSubcontractorRequests={sentSubcontractorRequests}
+									/>
+								)}
 							</div>
-							<div className="flex w-full justify-between">
-								<button className="btn btn-error btn-sm" type="button" onClick={handleCancelCurrentSSR}>
-									Cancel Request
-								</button>
-								<button
-									type="button"
-									className="btn btn-primary btn-sm"
-									onClick={() => {
-										document.getElementById(`delete-SSR`).close();
-										setCancelReason("");
-									}}
-								>
-									Keep Request
-								</button>
-							</div>
+						))}
+					</div>
+				)}
+				{showSSRFrom && (
+					<div className="mb-8 pb-4">
+						<div className="mb-8 pb-4">
+							<SsrFormStandalone
+								generatorData={generatorData}
+								transporterData={transporterData}
+								userId={user?.uid}
+								onClose={() => setShowSSRForm(false)}
+								serviceTypes={serviceTypes}
+								weekdayOptions={weekdayOptions}
+								serviceDurationOptions={serviceDurationOptions}
+								SERVICE_TYPES={SERVICE_TYPES}
+								subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+								serviceFrequencyOptions={serviceFrequencyOptions}
+								onRequestSent={handleSSRRequestSent} // Add this prop
+							/>
 						</div>
-					</dialog>
-				</>
+					</div>
+				)}
+
+				<dialog id={`delete-SSR`} className="modal">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => {
+									document.getElementById(`delete-SSR`).close();
+									setCancelReason("");
+								}}
+							>
+								✕
+							</button>
+						</div>
+						<h3 className="font-bold text-lg">Are You Sure ?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">Proceeding with this operation will cancel the Subcontractor Service Request</p>
+							<p>Enter Note for Cancellation *</p>
+							<textarea
+								rows={3}
+								value={cancelReason}
+								onChange={(e) => setCancelReason(e.target.value)}
+								className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
+							/>
+						</div>
+						<div className="flex w-full justify-between">
+							<button className="btn btn-error btn-sm" type="button" onClick={handleCancelCurrentSSR}>
+								Cancel Request
+							</button>
+							<button
+								type="button"
+								className="btn btn-primary btn-sm"
+								onClick={() => {
+									document.getElementById(`delete-SSR`).close();
+									setCancelReason("");
+								}}
+							>
+								Keep Request
+							</button>
+						</div>
+					</div>
+				</dialog>
+			</>
 
 			<div className="grid items-center justify-center relative">
-					{generatorData.transporterId == user?.uid && renderSSRButton()}
-					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
-				</div>
-
-			
+				{generatorData.transporterId == user?.uid && renderSSRButton()}
+				<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
+			</div>
 
 			<div className="py-5">
 				<div className="flex flex-col gap-2">
@@ -2072,106 +2053,110 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 					</div>
 				</div>
 			</div>
-			{!isReadOnly&&<form onSubmit={instructionHandleSubmit(instructionSubmitHandler)} className="grid gap-2">
-				<div>
-					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC] mb-2">
-						Generator Service Instructions{" "}
-						<span className="text-sm text-cardTextGray">(Instructions appear in OCTO Field App)</span>
-					</h6>
-					<div className="w-full flex flex-col md:flex-row gap-8">
-						<div className="w-1/2">
-							<Controller
-								name="deliveryNote"
-								control={instructionControl}
-								render={({ field: { onChange, value } }) => (
-									<Textarea
-										value={value}
-										onChange={onChange}
-										onBlur={(e) => {
-											autoSaveInstructions({ deliveryNote: e.target.value });
-										}}
-										label="Delivery Note (DEL)"
-									/>
+			{!isReadOnly && (
+				<form onSubmit={instructionHandleSubmit(instructionSubmitHandler)} className="grid gap-2">
+					<div>
+						<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC] mb-2">
+							Generator Service Instructions{" "}
+							<span className="text-sm text-cardTextGray">(Instructions appear in OCTO Field App)</span>
+						</h6>
+						<div className="w-full flex flex-col md:flex-row gap-8">
+							<div className="w-1/2">
+								<Controller
+									name="deliveryNote"
+									control={instructionControl}
+									render={({ field: { onChange, value } }) => (
+										<Textarea
+											value={value}
+											onChange={onChange}
+											onBlur={(e) => {
+												autoSaveInstructions({ deliveryNote: e.target.value });
+											}}
+											label="Delivery Note (DEL)"
+										/>
+									)}
+								/>
+								{errors.deliveryNote && <p className="text-red-500 text-sm mt-1">{errors.deliveryNote.message}</p>}
+								<Controller
+									name="parkingNote"
+									control={instructionControl}
+									render={({ field: { onChange, value } }) => (
+										<Textarea
+											value={value}
+											onChange={onChange}
+											onBlur={(e) => {
+												autoSaveInstructions({ parkingNote: e.target.value });
+											}}
+											label="Parking Note (PRK)"
+										/>
+									)}
+								/>
+								{errors.parkingNote && <p className="text-red-500 text-sm mt-1">{errors.parkingNote.message}</p>}
+								<Controller
+									name="locationOfWaste"
+									control={instructionControl}
+									render={({ field: { onChange, value } }) => (
+										<Textarea
+											value={value}
+											onChange={onChange}
+											onBlur={(e) => {
+												autoSaveInstructions({ locationOfWaste: e.target.value });
+											}}
+											label="Location Of Waste (LOC)"
+										/>
+									)}
+								/>
+								{errors.locationOfWaste && (
+									<p className="text-red-500 text-sm mt-1">{errors.locationOfWaste.message}</p>
 								)}
-							/>
-							{errors.deliveryNote && <p className="text-red-500 text-sm mt-1">{errors.deliveryNote.message}</p>}
-							<Controller
-								name="parkingNote"
-								control={instructionControl}
-								render={({ field: { onChange, value } }) => (
-									<Textarea
-										value={value}
-										onChange={onChange}
-										onBlur={(e) => {
-											autoSaveInstructions({ parkingNote: e.target.value });
-										}}
-										label="Parking Note (PRK)"
-									/>
+							</div>
+							<div className="w-1/2">
+								<Controller
+									name="lockBoxCode"
+									control={instructionControl}
+									render={({ field: { onChange, value } }) => (
+										<Textarea
+											value={value}
+											onChange={onChange}
+											onBlur={(e) => {
+												autoSaveInstructions({ lockBoxCode: e.target.value });
+											}}
+											label="Access Code"
+										/>
+									)}
+								/>
+								{errors.lockBoxCode && <p className="text-red-500 text-sm mt-1">{errors.lockBoxCode.message}</p>}
+								<Controller
+									name="serviceInstructions"
+									control={instructionControl}
+									render={({ field: { onChange, value } }) => (
+										<Textarea
+											value={value}
+											onChange={onChange}
+											onBlur={(e) => {
+												autoSaveInstructions({ serviceInstructions: e.target.value });
+											}}
+											label="Service Instructions"
+										/>
+									)}
+								/>
+								{errors.serviceInstruction && (
+									<p className="text-red-500 text-sm mt-1">{errors.serviceInstruction.message}</p>
 								)}
-							/>
-							{errors.parkingNote && <p className="text-red-500 text-sm mt-1">{errors.parkingNote.message}</p>}
-							<Controller
-								name="locationOfWaste"
-								control={instructionControl}
-								render={({ field: { onChange, value } }) => (
-									<Textarea
-										value={value}
-										onChange={onChange}
-										onBlur={(e) => {
-											autoSaveInstructions({ locationOfWaste: e.target.value });
-										}}
-										label="Location Of Waste (LOC)"
-									/>
-								)}
-							/>
-							{errors.locationOfWaste && <p className="text-red-500 text-sm mt-1">{errors.locationOfWaste.message}</p>}
-						</div>
-						<div className="w-1/2">
-							<Controller
-								name="lockBoxCode"
-								control={instructionControl}
-								render={({ field: { onChange, value } }) => (
-									<Textarea
-										value={value}
-										onChange={onChange}
-										onBlur={(e) => {
-											autoSaveInstructions({ lockBoxCode: e.target.value });
-										}}
-										label="Access Code"
-									/>
-								)}
-							/>
-							{errors.lockBoxCode && <p className="text-red-500 text-sm mt-1">{errors.lockBoxCode.message}</p>}
-							<Controller
-								name="serviceInstructions"
-								control={instructionControl}
-								render={({ field: { onChange, value } }) => (
-									<Textarea
-										value={value}
-										onChange={onChange}
-										onBlur={(e) => {
-											autoSaveInstructions({ serviceInstructions: e.target.value });
-										}}
-										label="Service Instructions"
-									/>
-								)}
-							/>
-							{errors.serviceInstruction && (
-								<p className="text-red-500 text-sm mt-1">{errors.serviceInstruction.message}</p>
-							)}
+							</div>
 						</div>
 					</div>
-				</div>
-				<div className="flex">
-					<button
-						type="submit"
-						disabled={!isUpdatingInstruction()}
-						className="btn btn-primary btn-md text-base ml-auto disabled:bg-cardTextGray disabled:text-white"
-					>
-						Save
-					</button>
-				</div>
-			</form>}
+					<div className="flex">
+						<button
+							type="submit"
+							disabled={!isUpdatingInstruction()}
+							className="btn btn-primary btn-md text-base ml-auto disabled:bg-cardTextGray disabled:text-white"
+						>
+							Save
+						</button>
+					</div>
+				</form>
+			)}
 			<GeneratorUpcomingServices generatorData={generatorData} transporterId={user?.uid} />
 			<GeneratorPreviousServices generatorData={generatorData} transporterId={user?.uid} />
 		</div>
@@ -2205,3 +2190,150 @@ function calculateUpcomingDates(schedule) {
 	}
 	return [];
 }
+
+const SsrFormStandalone = memo(
+	({
+		generatorData,
+		transporterData,
+		userId,
+		onClose,
+		serviceTypes,
+		weekdayOptions,
+		serviceDurationOptions,
+		SERVICE_TYPES,
+		subcontractorServiveFrequencyOptions,
+		serviceFrequencyOptions,
+		onRequestSent, // Add this callback prop
+	}) => {
+		// Create a dedicated form instance for the SSR form
+		const {
+			control: ssrControl,
+			handleSubmit: ssrHandleSubmit,
+			formState: { errors: ssrErrors },
+			watch: ssrWatch,
+			setValue: ssrSetValue,
+			getValues: ssrGetValues,
+			reset: ssrReset,
+			trigger: ssrTrigger,
+		} = useForm({
+			defaultValues: {
+				selectedSubContractor: null,
+				serviceSchedules: {
+					serviceType: "",
+					serviceDuration: "15",
+					serviceFrequency: {
+						type: "",
+						days: [],
+					},
+					expectedItemOrService: [],
+				},
+				requestedStartDate: null,
+				serviceNote: "",
+			},
+		});
+
+		const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
+		const [KeepContainers, setKeepContainers] = useState(false);
+		const [isSubmitting, setIsSubmitting] = useState(false);
+		const serviceNoteRef = React.createRef();
+
+		// Use the SSR management hook but only within this component
+		const {
+			subContractorContainers,
+			handleSubcontractorSelected,
+			subContractorData,
+			activeSentSSRs,
+			sendSubcontractorRequest,
+			fetchSentSubcontractorRequests, // Make sure this is available from your hook
+			itemsMap,
+			itemsOptions,
+		} = useSSRManagement(userId, generatorData?.id);
+
+		// Handle form submission
+		const onSubmit = useCallback(
+			async (data) => {
+				try {
+					setIsSubmitting(true);
+					const success = await sendSubcontractorRequest(data, transporterData, generatorData);
+					if (success) {
+						// Fetch the updated SSR list
+						await fetchSentSubcontractorRequests();
+
+						// Notify parent component that a request was sent successfully
+						if (onRequestSent) {
+							onRequestSent();
+						}
+
+						ssrReset();
+						if (onClose) onClose();
+					}
+				} catch (error) {
+					console.error("Error submitting SSR form:", error);
+					// Show error message
+				} finally {
+					setIsSubmitting(false);
+				}
+			},
+			[
+				sendSubcontractorRequest,
+				fetchSentSubcontractorRequests,
+				transporterData,
+				generatorData,
+				onClose,
+				ssrReset,
+				onRequestSent,
+			]
+		);
+
+		return (
+			<div className="ssr-standalone-container">
+				<form onSubmit={ssrHandleSubmit(onSubmit)}>
+					<SsrFormComponent
+						isReadOnly={false}
+						ssrData={activeSentSSRs[currentSSRIndex]}
+						control={ssrControl}
+						trigger={ssrTrigger}
+						setValue={ssrSetValue}
+						getValues={ssrGetValues}
+						watch={ssrWatch}
+						errors={ssrErrors}
+						serviceFrequencyOptions={serviceFrequencyOptions}
+						weekdayOptions={weekdayOptions}
+						subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+						subContractorData={subContractorData}
+						itemsMap={itemsMap}
+						serviceTypes={serviceTypes}
+						subContractorContainers={subContractorContainers}
+						itemsOptions={itemsOptions}
+						handleSubcontractorSelected={handleSubcontractorSelected}
+						SERVICE_TYPES={SERVICE_TYPES}
+						serviceNoteRef={serviceNoteRef}
+						KeepContainers={KeepContainers}
+						setKeepContainers={setKeepContainers}
+						serviceDurationOptions={serviceDurationOptions}
+						transporterData={transporterData}
+						currentUserId={userId}
+					/>
+
+					<div className="w-full flex justify-end p-2 gap-4">
+						<button
+							type="button"
+							className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+							onClick={onClose}
+							disabled={isSubmitting}
+						>
+							Cancel
+						</button>
+						<button
+							type="submit"
+							className="rounded-full px-4 py-2 text-sm bg-primary-500 hover:bg-primary-500/90 text-white transition"
+							disabled={isSubmitting}
+						>
+							{isSubmitting ? "Sending..." : "Send Request"}
+						</button>
+					</div>
+				</form>
+			</div>
+		);
+	}
+);
