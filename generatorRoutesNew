@@ -1861,16 +1861,63 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						</dialog>
 					</div>
 				))}
-			</form>
-			{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
-				<div>
-					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Subcontractor Service Requests (SSR)</h6>
 
-					{activeSentSSRs.map((ssr, index) => (
-						<div key={ssr.ssrId || index} className="pb-4">
+				
+				
+			</form>
+			<>
+					{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
+						<div>
+							<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">
+								Subcontractor Service Requests (SSR)
+							</h6>
+
+							{activeSentSSRs.map((ssr, index) => (
+								<div key={ssr.ssrId || index} className="pb-4">
+									<SsrFormComponent
+										isReadOnly={true}
+										ssrData={ssr}
+										control={control}
+										trigger={trigger}
+										setValue={setValue}
+										getValues={getValues}
+										watch={watch}
+										errors={errors}
+										serviceFrequencyOptions={serviceFrequencyOptions}
+										weekdayOptions={weekdayOptions}
+										subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+										subContractorData={subContractorData}
+										itemsMap={itemsMap}
+										serviceTypes={serviceTypes}
+										subContractorContainers={subContractorContainers}
+										itemsOptions={itemsOptions}
+										handleSubcontractorSelected={handleSubcontractorSelected}
+										SERVICE_TYPES={SERVICE_TYPES}
+										serviceNoteRef={serviceNoteRef}
+										KeepContainers={KeepContainers}
+										setKeepContainers={setKeepContainers}
+										serviceDurationOptions={serviceDurationOptions}
+										transporterData={transporterData}
+										currentUserId={user?.uid}
+									/>
+									{!isReadOnly && (
+										<SsrActionButtons
+											isReadOnly={true}
+											ssr={ssr}
+											currentSSRIndex={sentSubcontractorRequests.findIndex((r) => r.ssrId === ssr.ssrId)}
+											setCurrentSSRIndex={setCurrentSSRIndex}
+											sentSubcontractorRequests={sentSubcontractorRequests}
+										/>
+									)}
+								</div>
+							))}
+						</div>
+					)}
+					{showSSRFrom && (
+						<div className="mb-8 pb-4">
 							<SsrFormComponent
-								isReadOnly={true}
-								ssrData={ssr}
+								isReadOnly={false}
+								ssrData={null}
 								control={control}
 								trigger={trigger}
 								setValue={setValue}
@@ -1894,34 +1941,21 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 								transporterData={transporterData}
 								currentUserId={user?.uid}
 							/>
+							<SsrActionButtons
+								isReadOnly={false}
+								onCancel={() => {
+									setShowSSRForm(false);
+									resetFormForNewSSR();
+								}}
+								onSubmit={handleSendToSubcontractor}
+								currentSSRIndex={currentSSRIndex}
+								setCurrentSSRIndex={setCurrentSSRIndex}
+								sentSubcontractorRequests={sentSubcontractorRequests}
+							/>
 						</div>
-					))}
-				</div>
-			)}
-			{showSSRFrom&&
-			<SsrFormComponent
-			isReadOnly={isReadOnly}
-		//ssrData={ssr}
-		serviceFrequencyOptions={serviceFrequencyOptions}
-		weekdayOptions={weekdayOptions}
-		subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-		subContractorData={subContractorData}
-		serviceTypes={serviceTypes}
-		serviceDurationOptions={serviceDurationOptions}
-		transporterData={transporterData}
-		currentUserId={user?.uid}
-		onCancel={oncancel}
-		currentSSRIndex={currentSSRIndex}
-		setCurrentSSRIndex={setCurrentSSRIndex}
-		user={user}
-		generatorData={generatorData}
-			/>
-			}
-			<div className="grid items-center justify-center relative">
-					{generatorData.transporterId == user?.uid && renderSSRButton()}
-					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
-				</div>
-				<dialog id={`delete-SSR`} className="modal">
+					)}
+
+					<dialog id={`delete-SSR`} className="modal">
 						<div className="modal-box">
 							<div>
 								<button
@@ -1963,6 +1997,14 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 							</div>
 						</div>
 					</dialog>
+				</>
+
+			<div className="grid items-center justify-center relative">
+					{generatorData.transporterId == user?.uid && renderSSRButton()}
+					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
+				</div>
+
+			
 
 			<div className="py-5">
 				<div className="flex flex-col gap-2">
