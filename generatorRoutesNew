@@ -1208,6 +1208,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			await fetchSentSubcontractorRequests();
 		}
 	}, [user?.uid, generatorData?.id]);
+	
 
 	const handleSendToSubcontractor = async () => {
 		if (!user || !user?.uid) return;
@@ -2191,7 +2192,7 @@ function calculateUpcomingDates(schedule) {
 	return [];
 }
 
-const SsrFormStandalone = memo(
+const SsrFormStandalone = 
 	({
 		generatorData,
 		transporterData,
@@ -2336,4 +2337,3 @@ const SsrFormStandalone = memo(
 			</div>
 		);
 	}
-);
