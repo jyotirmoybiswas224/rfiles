@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import * as dateFnsTz from "date-fns-tz";
 import CustomDatePicker from "../../../../../components/UI/CustomDatePicker";
@@ -13,20 +13,25 @@ import {
 	getDocs,
 	limit,
 	onSnapshot,
+	or,
 	orderBy,
 	query,
 	startAfter,
 	Timestamp,
+	getCountFromServer,
 	updateDoc,
 	where,
 	writeBatch,
 } from "firebase/firestore";
 import { auth, COLLECTIONS, db, getDeliveryUrl, getManifestUrl } from "../../../../../config/firebase";
 import {
+	invoiceStatus,
 	itemsMap,
+	paymentTerms,
 	SERVICE_STATUS,
 	serviceTypes,
 	serviceTypesMap,
+	subWasteTypesArray,
 	subWasteTypesMap,
 	TRANSFER_STATUS,
 	transferStatusMap,
@@ -54,6 +59,7 @@ import { toast } from "react-toastify";
 import { BiTrash } from "react-icons/bi";
 import { log } from "handlebars";
 import OptionsContainer from "./OptionsContainer";
+import { BsFillInfoCircleFill } from "react-icons/bs";
 
 const transStatusOptions = [
 	{
@@ -72,10 +78,10 @@ const transStatusOptions = [
 
 const serviceStatusOptions = [
 	{ label: "All", value: "all" },
-	{ label: "Unlogged", value: "UNLOGGED" },
+	{ label: "Canceled", value: "CANCELED" },
 	{ label: "Completed", value: "COMPLETE" },
-	{ label: "Canceled", value: "CANCELLED" },
 	{ label: "Unavailable", value: "UNAVAILABLE" },
+	{ label: "Unlogged", value: "UNLOGGED" },
 ];
 
 const getStringOfServiceTypes = (scheduleData) => {
@@ -172,6 +178,8 @@ const getTransferredContainers = async (allContainerEntries = [], serviceId = ""
 		allDocs = allDocs.map((container) => {
 			const treatmentData = container.treatmentId ? treatmentMap[container.treatmentId]?.wasteProcessingFees : null;
 
+			console.log({ "Treatment data from waste processing fees": treatmentData });
+
 			let wasteProcessingFees = {};
 
 			if (treatmentData && typeof treatmentData === "object") {
@@ -205,6 +213,35 @@ const getTransferredContainers = async (allContainerEntries = [], serviceId = ""
 	};
 };
 
+const loadServiceContainerPriceBook = async ({ transporterId }) => {
+	const containersRef = collection(db, COLLECTIONS.priceBooks, transporterId, "default", "services", "containers");
+	const snapshot = await getDocs(containersRef);
+
+	const containerMap = {};
+	snapshot.forEach((doc) => {
+		containerMap[doc.id] = doc.data();
+	});
+
+	return containerMap;
+};
+
+const loadProductContainerPriceBook = async ({ transporterId }) => {
+	const containersRef = collection(db, COLLECTIONS.priceBooks, transporterId, "default", "products", "containers");
+	const snapshot = await getDocs(containersRef);
+
+	const containerMap = {};
+	snapshot.forEach((doc) => {
+		containerMap[doc.id] = doc.data();
+	});
+
+	return containerMap;
+};
+
+const approvalOptionsForDropdown = [
+	{ label: "Approved", value: "approved" },
+	{ label: "Pending", value: "pending" },
+];
+
 const ServiceReporting = () => {
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -214,7 +251,6 @@ const ServiceReporting = () => {
 	const [searchQuery, setSearchQuery] = useState("");
 	const [from, setFrom] = useState(new Date());
 	const [to, setTo] = useState(() => new Date());
-	const [pickupOptions, setPickupOptions] = useState([]);
 	const [serviceTypeOptions, setServiceTypeOptions] = useState([]);
 	const [routeOptions, setRouteOptions] = useState([]);
 	const [driverOptions, setDriverOptions] = useState([]);
@@ -228,12 +264,19 @@ const ServiceReporting = () => {
 	const [selectedTransStatusOptions, setSelectedTransStatusOptions] = useState(
 		transStatusOptions.map((item) => item.value)
 	);
+	const [subWasteTypeOptions] = useState([{ label: "All", value: "all" }, ...subWasteTypesArray]);
+	const [approvalOptions] = useState([{ label: "All", value: "all" }, ...approvalOptionsForDropdown]);
+	const [selectedApproved, setSelectedApproved] = useState([
+		"all",
+		...approvalOptionsForDropdown.map((item) => item.value),
+	]);
 	const [selectedPickupOptions, setSelectedPickupOptions] = useState([]);
 	const [selectedServices, setSelectedServices] = useState([]);
 	const [selectedDrivers, setSelectedDrivers] = useState([]);
 	const [genIds, setGenIds] = useState([]);
 	const [filteredData, setFilteredData] = useState([]);
 	const [selectedRoutes, setSelectedRoutes] = useState([]);
+	const [selectedSubWastes, setSelectedSubWastes] = useState(["all", ...subWasteTypesArray.map((item) => item.value)]);
 	const [isFiltering, startTransition] = useTransition();
 	const [genIdsLoading, setIsGenIdsLoading] = useState(true);
 	const [containersMap, setContainersMap] = useState({});
@@ -251,9 +294,11 @@ const ServiceReporting = () => {
 	const [editedData, setEditedData] = useState({});
 	const { user, loading } = useTUserContext();
 	const selectAllRef = useRef();
-	const [containerPriceBook, setContainerPriceBook] = useState({});
+	const [serviceContainerPriceBook, setServiceContainerPriceBook] = useState({});
+	const [productContainerPriceBook, setProductContainerPriceBook] = useState({});
 	const [showAddContainerModal, setShowAddContainerModal] = useState(false);
-	const [unsubscribers, setUnsubscribers] = useState([]);
+	const [unSubscribers, setUnSubscribers] = useState([]);
+	const [unavalogCount, setUnavalogCount] = useState({});
 	const [selectedServiceStatusOptions, setSelectedServiceStatusOptions] = useState(
 		serviceStatusOptions.map((item) => item.value)
 	);
@@ -270,32 +315,24 @@ const ServiceReporting = () => {
 	const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
 	const [hasMore, setHasMore] = useState(false);
 	const [dateFilterManuallyChanged, setDateFilterManuallyChanged] = useState(false);
-
-	// Load once during component mount or on page load
-	const loadContainerPriceBook = async () => {
-		const containersRef = collection(db, COLLECTIONS.defaultPriceBook, "services", "containers");
-		const snapshot = await getDocs(containersRef);
-
-		const containerMap = {};
-		snapshot.forEach((doc) => {
-			containerMap[doc.id] = doc.data();
-		});
-
-		return containerMap;
-	};
+	const [treatmentMap, setTreatmentMap] = useState({});
+	const [totalC, setTotalC] = useState(0);
+	const [unloggedCount, setUnloggedCount] = useState(0);
 
 	useEffect(() => {
-		loadContainerPriceBook().then(setContainerPriceBook);
-	}, []);
+		if (user) {
+			loadServiceContainerPriceBook({ transporterId: user.uid }).then(setServiceContainerPriceBook);
+			loadProductContainerPriceBook({ transporterId: user.uid }).then(setProductContainerPriceBook);
+		}
+	}, [user]);
 
 	const urlParams = new URLSearchParams(window.location.search);
 	const genOctoNumber = urlParams.get("id");
 
 	useEffect(() => {
 		if (genOctoNumber) {
-			console.log("genOctonumber", genOctoNumber);
+			console.log("genOctoNumber", genOctoNumber);
 			setSearchQuery(genOctoNumber);
-			// viewButtonHandler(gen);
 		}
 	}, [genOctoNumber]);
 
@@ -318,12 +355,17 @@ const ServiceReporting = () => {
 			console.log("Error fetching drivers", error);
 		}
 	};
+	console.log({ productContainerPriceBook, serviceContainerPriceBook });
 
 	const fetchDocuments = async () => {
 		if (!user) return;
 
 		try {
-			const q = query(collection(db, COLLECTIONS.generators), where("transporterId", "==", user?.uid));
+			const generatorsRef = collection(db, COLLECTIONS.generators);
+			const q = query(
+				generatorsRef,
+				or(where("transporterId", "==", user?.uid), where("subContractor.id", "==", user?.uid))
+			);
 			const querySnapshot = await getDocs(q);
 
 			const ids = querySnapshot.docs.map((doc) => doc.id);
@@ -347,8 +389,9 @@ const ServiceReporting = () => {
 				});
 				map[item.id] = item.name;
 			});
-			setPickupOptions([{ label: "All", value: "all" }, ...options]);
+			console.log({ map, resp });
 			setSelectedPickupOptions(["all", ...options.map((item) => item.value)]);
+			setTreatmentMap(map);
 		} catch (error) {
 			console.log("Error fetching routes", error);
 		}
@@ -385,8 +428,105 @@ const ServiceReporting = () => {
 		fetchTransporterData();
 	}, [user]);
 
+	console.log({ totalC, unloggedCount });
+
 	useEffect(() => {
-		if (user && !genIdsLoading) viewButtonHandler();
+		let isActive = true;
+
+		const fetchData = async () => {
+			if (!user || genIdsLoading) return;
+
+			// Reset state and start loading
+			if (isActive) {
+				setCompleteServices([]);
+				setLastVisibleDoc(null);
+				setIsLoading(true);
+				setTotalC(0);
+				setUnloggedCount(0);
+			}
+			try {
+				// Unsubscribe any previous listeners
+				unSubscribers.forEach((unSub) => unSub());
+				setUnSubscribers([]);
+				const shouldBypassDateFilter = genOctoNumber && !dateFilterManuallyChanged;
+				// Fetch new data
+				const utcFromDate = shouldBypassDateFilter
+					? new Date(2000, 0, 1)
+					: new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0));
+				const utcToDate = new Date(Date.UTC(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999));
+
+				const genIdChunks = [];
+				for (let i = 0; i < genIds.length; i += 10) {
+					genIdChunks.push(genIds.slice(i, i + 10));
+				}
+
+				// First get accurate total count from all chunks
+				let totalCount = 0;
+
+				// Run count queries for each chunk separately
+				await Promise.all(
+					genIdChunks.map(async (chunk) => {
+						const countQuery = query(
+							collection(db, COLLECTIONS.scheduledServices),
+							where("date", ">=", Timestamp.fromDate(utcFromDate)),
+							where("date", "<=", Timestamp.fromDate(utcToDate)),
+							where("status", "!=", SERVICE_STATUS.DELETED),
+							where("generatorId", "in", chunk)
+						);
+
+						const snapshot = await getCountFromServer(countQuery);
+						const chunkCount = snapshot.data().count;
+						totalCount += chunkCount;
+						console.log(`Chunk count: ${chunkCount} for ${chunk.length} generatorIds`);
+					})
+				);
+
+				setTotalC(totalCount);
+
+				const q = query(
+					collection(db, COLLECTIONS.scheduledServices),
+					where("date", ">=", Timestamp.fromDate(utcFromDate)),
+					where("date", "<=", Timestamp.fromDate(utcToDate)),
+					where("status", "!=", SERVICE_STATUS.DELETED),
+					orderBy("date", "desc"),
+					limit(pageSize)
+				);
+
+				const snapshotRes = await getDocs(q);
+				if (snapshotRes.empty) {
+					console.log("No documents found");
+				} 
+				const docs = snapshotRes.docs
+					.map((doc) => ({ id: doc.id, ...doc.data() }))
+					.filter((doc) => genIds.includes(doc.generatorId));
+
+				const processedDocs = (await Promise.all(docs.map((doc) => processDoc(doc))))
+					.filter(Boolean)
+					?.sort((a, b) => a.date?.toDate() > b.date?.toDate());
+				calculateUnlogged(processedDocs);
+				console.log({ processedDocs, genIds });
+				let filteredDocs = processedDocs?.filter((item) => checkDate(item));
+				if (isActive) {
+					console.log({ filteredDocs, processedDocs });
+					setCompleteServices(filteredDocs);
+					const newUnSubscribers = setupDocumentListeners(docs);
+					setUnSubscribers(newUnSubscribers);
+					setLastVisibleDoc(snapshotRes.docs[snapshotRes.docs.length - 1]);
+					setHasMore(snapshotRes.docs.length >= pageSize);
+				}
+			} catch (error) {
+				console.error("Error fetching services:", error);
+				if (isActive) toast.error("Failed to load services.");
+			} finally {
+				if (isActive) setIsLoading(false);
+			}
+		};
+		setUnloggedCount(0);
+		fetchData();
+
+		return () => {
+			isActive = false;
+		};
 	}, [to, from, user, genIdsLoading]);
 
 	useEffect(() => {
@@ -447,24 +587,38 @@ const ServiceReporting = () => {
 	const getSummaryData = (containers, transferredContainers = []) => {
 		const summary = [];
 
-		console.log({ sentContainers: containers });
-
 		containers?.forEach((el, index) => {
 			let container = transferredContainers.find((item) => item.containerType == el.containerType);
-			console.log({ el, containerPriceBook, containers: transferredContainers });
-
+			console.log({ el, serviceContainerPriceBook, containers: transferredContainers });
 			summary.push({
 				...el,
-				priceBookData: containerPriceBook[el.containerType] || null,
+				quantity: el.quantity ?? 1,
+				priceBookData: serviceContainerPriceBook[el.containerType] || null,
 				cost: container?.wasteProcessingFees?.[el.subWasteType] || "",
+				containerWashingFee: container?.wasteProcessingFees?.containerWashing?.checked
+					? Number(container?.wasteProcessingFees?.containerWashing?.fee?.price)
+					: null,
+			});
+		});
+		return summary;
+	};
+
+	const getDeliverySummaryData = (deliveredContainers = []) => {
+		const summary = [];
+
+		deliveredContainers?.forEach((el, index) => {
+			summary.push({
+				...el,
+				priceBookData: productContainerPriceBook[el.containerType] || null,
 			});
 		});
 		return summary;
 	};
 
 	const processDoc = async (serviceData) => {
-		console.log("Before status", serviceData.status);
-
+		// if (serviceData.generatorId == "Tf7tyAV0CAeTE9Ub3JZQ") {
+		console.log("Service data found for this generator", serviceData);
+		// }
 		const manifestDataRef = collection(db, COLLECTIONS.manifests);
 		const manifestQuery = query(manifestDataRef, where("serviceId", "==", serviceData.id));
 		const manifestRes = await getDocs(manifestQuery);
@@ -478,9 +632,6 @@ const ServiceReporting = () => {
 		const containerDataRef = containers.map((id) => doc(db, COLLECTIONS.servicedContainers, id));
 		const servicedContainerDocs = await Promise.all(containerDataRef.map((ref) => getDoc(ref)));
 		const allServicedContainersData = servicedContainerDocs.map((doc) => ({ id: doc.id, ...doc.data() }));
-
-		console.log({ allServicedContainersData, manifestData, serviceId: serviceData.id });
-
 		const { transferStatus, transferredContainers } = await getTransferredContainers(
 			allServicedContainersData,
 			serviceData.id
@@ -521,7 +672,8 @@ const ServiceReporting = () => {
 			let allDeliveredContainers = transData?.[0]?.containers;
 			const delContainerRefs = allDeliveredContainers.map((item) => doc(db, COLLECTIONS.deliveredContainers, item));
 			const delContainerDocs = await Promise.all(delContainerRefs.map((ref) => getDoc(ref)));
-			deliverySummary = delContainerDocs.map((doc) => ({ id: doc.id, ...doc.data() }));
+			const delContainers = delContainerDocs.map((doc) => ({ id: doc.id, ...doc.data() }));
+			deliverySummary = getDeliverySummaryData(delContainers);
 		}
 
 		if (serviceData.serviceScheduleId) {
@@ -537,123 +689,28 @@ const ServiceReporting = () => {
 			serviceData.transferStatus === "COMPLETE" ? serviceData.transferredContainers : []
 		);
 
-		console.log("Service Data date", serviceData?.date?.toDate());
-
 		if (serviceData?.status === SERVICE_STATUS.CLOSED) {
 			console.log({ unavailableService: serviceData });
 		}
 
-		return {
-			id: serviceData.id,
-			date: serviceData.date,
-			completedAt: serviceData.completedAt,
-			time: serviceData.date?.toDate(),
-			driverNote: serviceData?.driverNote?.length > 0 ? serviceData?.driverNote : "--",
-			tempServiceIns: serviceData?.tempServiceIns,
-			customerId: generatorDataRef.id,
-			generatorId: generatorData.id,
-			serviceId: serviceData.id,
-			completedViaServiceHistoryPage: Boolean(serviceData.completedViaServiceHistoryPage),
-			scheduleId: serviceData.serviceScheduleId,
-			generatorName: `${generatorData?.generatorName ?? "--"} `,
-			email: generatorData.serviceAddress?.email?.length ? generatorData.serviceAddress?.email : "--",
-			phone: generatorData.serviceAddress?.phone?.length ? generatorData.serviceAddress?.phone : "",
-			internalAccountNumber: generatorData.internalAccountNumber?.length ? generatorData.internalAccountNumber : "--",
-			genId: generatorData.id,
-			expectedItemOrService: serviceData.scheduleData
-				? serviceData.scheduleData?.expectedItemOrService
-					? serviceData.scheduleData?.expectedItemOrService?.map((e) => e.item)
-					: []
-				: [],
-			driverId: serviceData.assignedDriverId,
-			deliveryId: transData.length > 0 ? transData?.[0].id : null,
-			octoNumber: octoFormatter(generatorData.octoNumber) ?? "--",
-			address: getFormattedAddress(generatorData?.serviceAddress),
-			billed: Boolean(serviceData?.billed),
-			billingMethod: serviceData?.billingMethod,
-			billingNote: serviceData?.billingNote,
-			billedDate: serviceData?.billedDate?.toDate()?.toLocaleDateString() ?? null,
-			paidDate: serviceData?.paidDate?.toDate()?.toLocaleDateString() ?? null,
-			approvedDate: serviceData?.approvedDate?.toDate()?.toLocaleDateString() ?? null,
-			approvedNote: serviceData?.approvedNote,
-			approved: serviceData?.approved ? true : false,
-			paid: serviceData?.paid ?? false,
-			adminNote: serviceData?.adminNote ?? "",
-			paidAmount: serviceData?.paidAmount ?? "--",
-			picture: Array.isArray(serviceData?.serviceImages) ? serviceData?.serviceImages : [],
-			optionChecked: false,
-			driverName: `${serviceData?.assignedDriverName ?? "--"}`,
-			pickUpTruck: `${serviceData?.assignedServiceVehicleName ?? "--"}`,
-			serviceType: serviceTypeString ?? "--",
-			routeName: routeData?.routeLabel ?? "--",
-			routeId: routeRes.id ?? "--",
-			quantity: "--",
-			totalWeight: "--",
-			serviceVehicleId: serviceData.assignedServiceVehicleId,
-			transporterId: user.uid,
-			serviceStatus:
-				serviceData?.status === SERVICE_STATUS.PENDING || serviceData?.status === SERVICE_STATUS.INPROGRESS
-					? "UNLOGGED"
-					: serviceData?.status === SERVICE_STATUS.COMPLETE
-					? "COMPLETE"
-					: serviceData?.status === SERVICE_STATUS.CLOSED || serviceData?.status === SERVICE_STATUS.CANCELLED
-					? "UNAVAILABLE"
-					: "",
-			transferStatus: serviceData?.transferStatus,
-			transferredContainers: serviceData.transferredContainers ?? [],
-			serviceSummary,
-			deliverySummary,
+		return processedServiceData({
 			deliveryReceipt,
-			noWaste: serviceData?.noWaste,
-			manifestData: manifestData?.filter(
-				(manifest, index, self) => index === self.findIndex((m) => m.manifestOctoId === manifest.manifestOctoId)
-			),
-		};
+			deliverySummary,
+			generatorData,
+			generatorDataRef,
+			manifestData,
+			routeData,
+			serviceData,
+			serviceSummary,
+			routeRes,
+			serviceTypeString,
+			transData,
+			user,
+			transporterData,
+		});
 	};
 
-	const viewButtonHandler = async () => {
-		setIsLoading(true);
-
-		unsubscribers.forEach((unsub) => unsub());
-		setUnsubscribers([]);
-
-		const shouldBypassDateFilter = genOctoNumber && !dateFilterManuallyChanged;
-		const utcFromDate = new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0));
-		const utcToDate = new Date(Date.UTC(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999));
-
-		try {
-			const q = query(
-				collection(db, COLLECTIONS.scheduledServices),
-				where("date", ">=", Timestamp.fromDate(utcFromDate)),
-				where("date", "<=", Timestamp.fromDate(utcToDate)),
-				where("status", "!=", SERVICE_STATUS.DELETED),
-				orderBy("date", "desc"),
-				limit(pageSize)
-			);
-
-			const snapshotRes = await getDocs(q);
-			const docs = snapshotRes.docs
-				.map((doc) => ({ id: doc.id, ...doc.data() }))
-				.filter((doc) => genIds.includes(doc.generatorId));
-
-			// Process initial data
-			const processedDocs = await Promise.all(docs.map((doc) => processDoc(doc)));
-			setCompleteServices(processedDocs?.sort((a, b) => a.date?.toDate() > b.date?.toDate()));
-
-			// Set up listeners for these documents
-			const newUnsubscribers = setupDocumentListeners(docs);
-			setUnsubscribers(newUnsubscribers);
-
-			setLastVisibleDoc(snapshotRes.docs[snapshotRes.docs.length - 1]);
-			setHasMore(snapshotRes.docs.length >= pageSize);
-		} catch (error) {
-			console.error("Error fetching services:", error);
-			toast.error("Failed to load services.");
-		} finally {
-			setIsLoading(false);
-			setSelectedRows([]);
-		}
-	};
+	// console.log({treatment})
 
 	const loadMore = async () => {
 		if (!lastVisibleDoc || !hasMore) return;
@@ -661,8 +718,9 @@ const ServiceReporting = () => {
 
 		try {
 			const shouldBypassDateFilter = genOctoNumber && !dateFilterManuallyChanged;
-
-			const utcFromDate = shouldBypassDateFilter? new Date(1, 1, 2000) :new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0));
+			const utcFromDate = shouldBypassDateFilter
+				? Timestamp.fromDate(new Date(2000, 0, 1))
+				: Timestamp.fromDate(new Date(Date.UTC(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0)));
 			const utcToDate = new Date(Date.UTC(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999));
 
 			const q = query(
@@ -682,13 +740,14 @@ const ServiceReporting = () => {
 
 			// Process new documents
 			const processedDocs = await Promise.all(newDocs.map((doc) => processDoc(doc)));
-
+			calculateUnlogged(processedDocs);
+			let filteredDocs = processedDocs?.filter((item) => checkDate(item));
 			// Merge with existing documents
-			setCompleteServices((prev) => [...prev, ...processedDocs]);
+			setCompleteServices((prev) => [...prev, ...filteredDocs]);
 
 			// Set up listeners for these new documents
-			const newUnsubscribers = setupDocumentListeners(newDocs);
-			setUnsubscribers((prev) => [...prev, ...newUnsubscribers]);
+			const newUnSubscribers = setupDocumentListeners(newDocs);
+			setUnSubscribers((prev) => [...prev, ...newUnSubscribers]);
 
 			setLastVisibleDoc(snap.docs[snap.docs.length - 1]);
 			setHasMore(snap.docs.length >= pageSize);
@@ -698,6 +757,29 @@ const ServiceReporting = () => {
 		} finally {
 			setIsLoadingMore(false);
 		}
+	};
+
+	const checkDate = (item) => {
+		const today = new Date();
+		const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+
+		console.log({ todayUtc, dateUtc: item.date?.toDate(), diff: todayUtc - item.date?.toDate() });
+
+		// Pure function without side effects
+		if (item.completedAt) return true;
+		if (todayUtc > item.date?.toDate()) return true;
+		return item.serviceStatus !== "UNLOGGED";
+	};
+
+	const calculateUnlogged = (completeServices) => {
+		const unlogged = completeServices.filter((service) => {
+			const today = new Date();
+			const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+
+			return !service.completedAt && todayUtc <= service.date?.toDate() && service.serviceStatus === "UNLOGGED";
+		});
+
+		setUnloggedCount((prev) => prev + unlogged.length);
 	};
 
 	// Helper function to set up listeners
@@ -714,17 +796,16 @@ const ServiceReporting = () => {
 
 				const processed = await processDoc(updatedDoc);
 
+				if (!checkDate(processed)) return;
+
 				setCompleteServices((prev) => {
-					// Find if document already exists in the array
 					const index = prev.findIndex((doc) => doc.id === processed.id);
 
 					if (index >= 0) {
-						// Update existing document
 						const newArray = [...prev];
 						newArray[index] = processed;
 						return newArray;
 					} else {
-						// Add new document
 						return [...prev, processed];
 					}
 				});
@@ -736,12 +817,12 @@ const ServiceReporting = () => {
 		return listeners;
 	};
 
-	// Make sure to clean up all listeners when component unmounts
+	// Cleaning up all listeners when component unmounts
 	useEffect(() => {
 		return () => {
-			unsubscribers.forEach((unsub) => unsub());
+			unSubscribers.forEach((unsub) => unsub());
 		};
-	}, [unsubscribers]);
+	}, [unSubscribers]);
 
 	const normalizedSearchQuery = searchQuery.toLowerCase().replace(/\s+/g, "");
 	const getSortInfo = (item) => {
@@ -769,6 +850,13 @@ const ServiceReporting = () => {
 			matchedServices = matchedServices.filter((item) =>
 				selectedRoutes.includes("all") ? true : selectedRoutes.includes(item.routeId)
 			);
+			matchedServices = matchedServices.filter((item) =>
+				selectedSubWastes.includes("all") ? true : item.subWasteType.some((type) => selectedSubWastes.includes(type))
+			);
+			matchedServices = matchedServices.filter((item) =>
+				selectedApproved.includes("all") ? true : selectedApproved.includes(item.approved ? "approved" : "pending")
+			);
+
 			matchedServices = selectedTransStatusOptions.includes("all")
 				? matchedServices
 				: matchedServices.filter((item) =>
@@ -782,94 +870,38 @@ const ServiceReporting = () => {
 				? matchedServices
 				: matchedServices.filter((item) => selectedServiceStatusOptions.includes(item.serviceStatus));
 
-			matchedServices = matchedServices
-				.sort((a, b) => {
-					const aInfo = getSortInfo(a);
-					const bInfo = getSortInfo(b);
+			console.log({ matchedServices });
+			matchedServices = matchedServices.sort((a, b) => {
+				const aInfo = getSortInfo(a);
+				const bInfo = getSortInfo(b);
 
-					// Compare by sortValue (newer first)
-					if (bInfo.sortValue !== aInfo.sortValue) {
-						return bInfo.sortValue - aInfo.sortValue;
-					}
+				if (bInfo.sortValue !== aInfo.sortValue) {
+					return bInfo.sortValue - aInfo.sortValue;
+				}
 
-					// Tie-breaker: completedAt entries come before non-completed
-					if (aInfo.hasCompletedAt !== bInfo.hasCompletedAt) {
-						return bInfo.hasCompletedAt ? 1 : -1;
-					}
+				if (aInfo.hasCompletedAt !== bInfo.hasCompletedAt) {
+					return bInfo.hasCompletedAt ? 1 : -1;
+				}
 
-					return 0;
-				})
-				.filter((item) => processDateWise(item));
+				return 0;
+			});
 
 			setFilteredData(matchedServices);
 			setNewContainers([]);
 			setNewDelContainers([]);
-			setIsLoading(false);
 		});
 	}, [
-		completeServices,
-		selectedDrivers,
-		selectedPickupOptions,
-		selectedServices,
-		selectedRoutes,
-		selectedTransStatusOptions,
 		searchQuery,
+		selectedRoutes,
+		selectedDrivers,
+		selectedApproved,
+		selectedServices,
+		completeServices,
+		selectedSubWastes,
+		selectedPickupOptions,
+		selectedTransStatusOptions,
 		selectedServiceStatusOptions,
 	]);
-
-	console.log({
-		filteredData: filteredData.map((item) => ({
-			date: formatUtcDateString(item.date.toDate().toUTCString()),
-			completedAt: item.completedAt?.toDate(),
-		})),
-		completeServices: completeServices.map((item) => ({
-			date: formatUtcDateString(item.date.toDate().toUTCString()),
-			completedAt: item.completedAt?.toDate(),
-		})),
-	});
-
-	let formatUTC = (toDayUtc) => {
-		const utcDate = new Date(toDayUtc);
-
-		// Create a new Date in the user's timezone using same year/month/day, set to 12PM
-		const localNoonDate = new Date(utcDate.getFullYear(), utcDate.getMonth(), utcDate.getDate(), 0, 0, 0);
-
-		// Format to string (optional)
-		// const displayString = localNoonDate.toLocaleString(undefined, {
-		// 	hour: "numeric",
-		// 	minute: "2-digit",
-		// 	hour12: true,
-		// 	year: "numeric",
-		// 	month: "short",
-		// 	day: "numeric",
-		// });
-
-		return localNoonDate;
-	};
-
-	const processDateWise = (item) => {
-		let date = item.date?.toDate();
-
-		let today = new Date();
-		let serviceUtc = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-		let toDayUtc = formatUtcDateString(serviceUtc.toUTCString());
-		let dateUtc = formatUtcDateString(date.toUTCString());
-
-		console.log({
-			item,
-			date,
-			serviceUtc,
-			toDayUtc: formatUTC(toDayUtc),
-			dateUtc,
-		});
-
-		if (date >= serviceUtc) {
-			if (item.completedAt && !item?.completedViaServiceHistoryPage) return true;
-			else return false;
-		} else {
-			return true;
-		}
-	};
 
 	const fetchAllRoutesOptions = async () => {
 		try {
@@ -902,13 +934,6 @@ const ServiceReporting = () => {
 			fetchAllServiceVehicleOptions();
 		}
 	}, [user]);
-
-	console.log({
-		isLoading,
-		isFiltering,
-		filteredDataForFirstOneCompletedAt: filteredData[0]?.completedAt?.toDate(),
-		filteredDataForFirstOneCreatedAt: filteredData[0]?.date?.toDate(),
-	});
 
 	const handleBillingCheckbox = async (isChecked, serviceId, statusUpdateReason = "") => {
 		let docRef = doc(db, COLLECTIONS.scheduledServices, serviceId);
@@ -974,15 +999,15 @@ const ServiceReporting = () => {
 				)
 			);
 
-			toast.success(isChecked ? "Payment marked as complete!" : "Payment status updated.");
+			// toast.success(isChecked ? "Payment marked as complete!" : "Payment status updated.");
 		} catch (error) {
 			console.error("Error updating payment status:", error);
 			toast.error("Failed to update payment status.");
 		}
 	};
-	const handleApprovedCheckbox = async (isChecked, serviceId, statusUpdateReason = "") => {
+	const handleApprovedCheckbox = async (isChecked, serviceId, statusUpdateReason = "", service) => {
 		let docRef = doc(db, COLLECTIONS.scheduledServices, serviceId);
-		console.log({ isChecked, serviceId, statusUpdateReason });
+		console.log({ isChecked, serviceId, statusUpdateReason, service });
 
 		let toUpdate = {
 			approved: isChecked,
@@ -995,6 +1020,36 @@ const ServiceReporting = () => {
 		};
 
 		try {
+			const generatorRes = await getDoc(doc(db, COLLECTIONS.generators, service.generatorId));
+			if (!generatorRes.exists()) {
+				throw new Error("Generator not found");
+			}
+			const generatorData = generatorRes.data();
+			let term = paymentTerms.NET30;
+			if (typeof generatorData?.paymentTerms === "undefined" || !generatorData?.paymentTerms?.length) {
+				const transporterBIllingSettingsRes = await getDoc(doc(db, COLLECTIONS.billingSettings, user.uid));
+				if (transporterBIllingSettingsRes.exists()) {
+					const transporterBillingSettings = transporterBIllingSettingsRes.data();
+					term = transporterBillingSettings?.paymentOptions?.paymentTerms;
+				} else {
+					console.log("No payment terms found for generator or transporter");
+				}
+			} else {
+				term = generatorData?.paymentTerms;
+			}
+			const res = await getDocs(
+				query(
+					collection(db, COLLECTIONS.invoices),
+					where("transporterId", "==", user.uid),
+					where("paymentTerm", "==", term),
+					where("generatorId", "==", service.generatorId),
+					where("status", "==", invoiceStatus.DELAYED_CHARGE)
+				)
+			);
+
+			const batch = writeBatch(db);
+			batch.update(docRef, toUpdate);
+
 			await updateDoc(docRef, toUpdate);
 			setCompleteServices((prevServices) =>
 				prevServices.map((service) =>
@@ -1008,7 +1063,7 @@ const ServiceReporting = () => {
 				)
 			);
 
-			toast.success(isChecked ? "Payment marked as complete!" : "Payment status updated.");
+			// toast.success(isChecked ? "Payment marked as complete!" : "Payment status updated.");
 		} catch (error) {
 			console.error("Error updating payment status:", error);
 			toast.error("Failed to update payment status.");
@@ -1057,7 +1112,7 @@ const ServiceReporting = () => {
 		const newData = [...editedData[section]];
 		newData[index][field] = value;
 		let resp = await fetchContainerData(value);
-		console.log({ field, value, resp, group, containersMap, containerPriceBook });
+		console.log({ field, value, resp, group, containersMap, serviceContainerPriceBook });
 		newData[index]["subWasteType"] = resp.subWasteType;
 		setEditedData((prev) => ({ ...prev, [section]: newData }));
 	};
@@ -1166,10 +1221,11 @@ const ServiceReporting = () => {
 						generatorId: service.generatorId,
 						routeId: service.routeId,
 						scheduleId: service.scheduleId,
+						serviceStatus: SERVICE_STATUS.COMPLETE,
 						serviceVehicleId: service.serviceVehicleId,
 						transporterId: service.transporterId,
 						transferStatus: service.transferStatus ?? transferStatusType.ON_TRUCK,
-						createdAt: Timestamp.now(),
+						createdAt: service?.date?.toDate() ?? service?.completedAt?.toDate(),
 						updatedAt: Timestamp.now(),
 					};
 					newContainerss[i] = newContainer;
@@ -1285,22 +1341,28 @@ const ServiceReporting = () => {
 				serviceUpdate.consolidated = [...serviceUpdate.consolidated, ...newConsolidated];
 
 				serviceUpdate.itemized = [...serviceUpdate.itemized, ...newItemized];
-				if (service.status !== SERVICE_STATUS.COMPLETE) {
+				if (service.serviceStatus !== SERVICE_STATUS.COMPLETE) {
+					console.log({ serviceOriginalStatus: service.serviceStatus });
 					serviceUpdate.status = SERVICE_STATUS.COMPLETE;
 					const originalDate = service.date.toDate();
 					const year = originalDate.getUTCFullYear();
 					const month = originalDate.getUTCMonth();
 					const date = originalDate.getUTCDate();
 
-					// Create a new Date at 12 PM UTC
-					const utcNoonDate = new Date(Date.UTC(year, month, date, 12, 0, 0));
+					const completedAt = new Date();
+					completedAt.setFullYear(year);
+					completedAt.setMonth(month);
+					completedAt.setDate(date);
+					completedAt.setHours(12, 0, 0, 0); // Set to 12 PM
 
 					// Convert back to Firestore Timestamp
-					const updatedTimestamp = Timestamp.fromDate(utcNoonDate);
+					const updatedTimestamp = Timestamp.fromDate(completedAt);
 					serviceUpdate.completedAt = updatedTimestamp;
-					serviceUpdate.completedViaServiceHistoryPage = true;
+					serviceUpdate.earlierStatus = service.serviceStatus;
+					serviceUpdate.transferStatus = TRANSFER_STATUS.ON_TRUCK;
 				}
 				console.log({ serviceUpdate });
+				// return;
 				if (service.noWaste) serviceUpdate.noWaste = service.noWaste;
 				batch.update(serviceRef, serviceUpdate);
 				await batch.commit();
@@ -1389,9 +1451,9 @@ const ServiceReporting = () => {
 						transporterId: service.transporterId,
 						driverId: service.driverId,
 						serviceVehicleId: service.serviceVehicleId,
-						createdAt: Timestamp.now(),
-						date: service?.completedAt ?? Timestamp.now(),
-						updatedAt: Timestamp.now(),
+						createdAt: service?.date ?? service?.completedAt,
+						date: service?.date ?? service?.completedAt,
+						updatedAt: service?.date ?? service?.completedAt,
 						containers: [],
 					};
 
@@ -1442,7 +1504,7 @@ const ServiceReporting = () => {
 						const newContainerData = {
 							...newContainer,
 							updatedAt: Timestamp.now(),
-							createdAt: Timestamp.now(),
+							createdAt: service?.date?.toDate() ?? service?.completedAt?.toDate(),
 							generatorId: service.generatorId,
 							deliveryId: deliveryRef.id,
 							routeId: service.routeId,
@@ -1563,6 +1625,7 @@ const ServiceReporting = () => {
 				containerType: "",
 				type: "",
 				quantity: 1,
+				priceBookData: null,
 			},
 		]);
 	};
@@ -1571,6 +1634,10 @@ const ServiceReporting = () => {
 		setNewDelContainers(
 			newDelContainers.map((container) => (container.tempId === tempId ? { ...container, [field]: value } : container))
 		);
+	};
+
+	const handleRemoveNewDelContainer = (tempId) => {
+		setNewDelContainers(newDelContainers.filter((c) => c.tempId !== tempId));
 	};
 
 	const handleDeleteContainer = async (serviceId, containerId) => {
@@ -1804,10 +1871,6 @@ const ServiceReporting = () => {
 		}
 	};
 
-	console.log("====================================");
-	console.log({ completeServices, containersMap, filteredData, editedData });
-	console.log("====================================");
-
 	const groupContainers = (containers, manifests) => {
 		return containers.reduce((groups, container) => {
 			const key = container.subWasteType;
@@ -1828,10 +1891,17 @@ const ServiceReporting = () => {
 
 	const totalCountData = useMemo(() => {
 		let totalCounts = {};
+		let unloggedCounts = 0,
+			unavailableCounts = 0;
 
 		filteredData
 			?.filter((service) => selectedRows.includes(service.id))
 			.forEach((item) => {
+				if (item.serviceStatus == "UNLOGGED") {
+					unloggedCounts++;
+				} else if (item.serviceStatus == "UNAVAILABLE") {
+					unavailableCounts++;
+				}
 				item.serviceSummary?.forEach((container) => {
 					console.log({ container });
 					const { subWasteType, quantity = 1, weight } = container;
@@ -1858,10 +1928,15 @@ const ServiceReporting = () => {
 			}
 		});
 
+		setUnavalogCount({
+			["Unlogged"]: unloggedCounts,
+			["Unavailable"]: unavailableCounts,
+		});
+
 		return totalCounts;
 	}, [selectedRows]);
 
-	console.log({ totalCountData, selectedRows });
+	console.log({ filteredData });
 
 	return (
 		<div
@@ -1892,13 +1967,30 @@ const ServiceReporting = () => {
 					subContractorOptions={subContractorOptions}
 					setContractorOptions={setContractorOptions}
 					setSubContractorOptions={setSubContractorOptions}
+					approvalOptionsForDropdown={approvalOptionsForDropdown}
 					selectedTransStatusOptions={selectedTransStatusOptions}
 					selectedServiceStatusOptions={selectedServiceStatusOptions}
 					setSelectedTransStatusOptions={setSelectedTransStatusOptions}
 					setSelectedServiceStatusOptions={setSelectedServiceStatusOptions}
 					setDateFilterManuallyChanged={setDateFilterManuallyChanged}
+					selectedSubWastes={selectedSubWastes}
+					setSelectedSubWastes={setSelectedSubWastes}
+					subWasteTypeOptions={subWasteTypeOptions}
+					approvalOptions={approvalOptions}
+					selectedApproved={selectedApproved}
+					setSelectedApproved={setSelectedApproved}
 				/>
 			</div>
+			<div className="px-8 py-3 bg-white border-b border-gray-200 flex items-center justify-between">
+				<p className="text-sm text-gray-600 flex items-center">
+					{!isLoading && (
+						<p>
+							{filteredData.length} of {totalC - unloggedCount} results
+						</p>
+					)}
+				</p>
+			</div>
+
 			<div className={`flex flex-col w-full font-medium overflow-y-scroll`}>
 				<div className="flex bg-whiteBlue w-fit py-4">
 					<div className="w-8 mx-8 flex justify-center items-center hover:cursor-pointer">
@@ -1986,7 +2078,8 @@ const ServiceReporting = () => {
 														<p className="text-center py-2">Delivery Only</p>
 													))}
 											</>
-											{service.serviceSummary?.length > 0 && (
+											{(service.serviceSummary?.length > 0 ||
+												(editing.serviceId === service.id && editing.section === "service")) && (
 												<div className="flex gap-2 text-left py-2 font-medium">
 													<p className="w-[20%]">Subwaste Type</p>
 													<p className="w-[30%]">Container</p>
@@ -2011,14 +2104,33 @@ const ServiceReporting = () => {
 												let groupTotal = 0;
 												const subtotal = group.containers.reduce(
 													(acc, container) => {
+														let isPricePerPound = Boolean(container.priceBookData?.chargePerPound);
 														const quantity = Number(container.quantity) || 1;
 														const weight = Number(container.weight) || 0;
-														const rate = Number(container.priceBookData?.rate) || 0;
+
+														const weightLimit = Number(container.priceBookData?.weightLimit) || 0;
+														const servicePrice = Number(container.priceBookData?.servicePrice) || 0;
+														const pricePerPound = Number(container.priceBookData?.pricePerPound) || 0;
+
+														let containerTotal = 0;
+
+														if (isPricePerPound) {
+															containerTotal = weight * pricePerPound;
+														} else {
+															if (weight <= weightLimit) {
+																containerTotal = quantity * servicePrice;
+															} else {
+																const extraWeight = weight - weightLimit;
+																const baseCharge = quantity * servicePrice;
+																const extraCharge = extraWeight * pricePerPound;
+																containerTotal = baseCharge + extraCharge;
+															}
+														}
 
 														return {
 															quantity: acc.quantity + quantity,
 															weight: acc.weight + weight,
-															total: acc.total + quantity * rate,
+															total: acc.total + containerTotal,
 														};
 													},
 													{ quantity: 0, weight: 0, total: 0, cost: 0 }
@@ -2026,18 +2138,44 @@ const ServiceReporting = () => {
 
 												return (
 													<div key={subWasteType} className={`${i < arr.length - 1 ? "border-b border-black/40" : ""}`}>
-														<button
-															className="text-left text-primary hover:underline"
-															onClick={() => handleManifestView(group?.manifest?.id, group.manifest?.url)}
-														>
-															{group?.manifest?.manifestOctoId || ""}
-														</button>
+														{group?.manifest?.manifestOctoId && (
+															<button
+																className="text-left text-primary hover:underline"
+																onClick={() => handleManifestView(group?.manifest?.id, group.manifest?.url)}
+															>
+																{group?.manifest?.manifestOctoId}
+															</button>
+														)}
 
 														{group.containers.map((summary, idx) => {
-															const rate = Number(summary.priceBookData?.pricePerPound) || 0;
+															let isPricePerPound = Boolean(summary.priceBookData?.chargePerPound);
+															let containerTotal = 0;
+															let rate = 0;
 
-															const containerTotal =
-																Number(summary.weight) * Number(summary.priceBookData?.pricePerPound);
+															const weight = Number(summary.weight);
+															const weightLimit = Number(summary.priceBookData?.weightLimit) || 0;
+															const servicePrice = Number(summary.priceBookData?.servicePrice) || 0;
+															const pricePerPound = Number(summary.priceBookData?.pricePerPound) || 0;
+															const quantity = Number(summary.quantity);
+
+															if (isPricePerPound) {
+																rate = pricePerPound;
+																containerTotal = weight * rate;
+															} else {
+																if (weight <= weightLimit) {
+																	rate = servicePrice;
+																	containerTotal = quantity * rate;
+																} else {
+																	const extraWeight = weight - weightLimit;
+																	const baseCharge = quantity * servicePrice;
+																	const extraCharge = extraWeight * pricePerPound;
+
+																	rate = servicePrice;
+																	// rate = `${servicePrice} (base) + ${pricePerPound}/lb over limit`;
+																	containerTotal = baseCharge + extraCharge;
+																}
+															}
+
 															groupTotal += containerTotal;
 
 															return (
@@ -2069,7 +2207,7 @@ const ServiceReporting = () => {
 																				className="border rounded p-0.5 w-[30%] px-1"
 																			>
 																				<option value="" disabled hidden></option>
-																				{Object.entries(containerPriceBook)
+																				{Object.entries(serviceContainerPriceBook)
 																					.filter(([value, data]) => data.subWasteType == summary.subWasteType)
 																					.map(([value, data]) => (
 																						<option key={value} value={value}>
@@ -2116,14 +2254,19 @@ const ServiceReporting = () => {
 																			/>
 
 																			{/* Rate Display */}
-																			<div className="w-[8%]">${rate}</div>
+																			<div className="w-[8%]">${rate?.toFixed(2)}</div>
 
 																			{/* Total Display */}
 																			<div className="w-[8%]">${containerTotal.toFixed(2)}</div>
 
 																			{/* Cost Display */}
 																			<div className="w-[8%]">
-																				{summary.cost ? `$${Number(summary.cost) / 100}` : ""}
+																				{summary.cost
+																					? `$${(
+																							Math.abs(Number(summary.cost)) / 100 +
+																							Number(summary?.containerWashingFee)
+																					  ).toFixed(2)}`
+																					: ""}
 																			</div>
 
 																			{/* Delete Button */}
@@ -2146,29 +2289,34 @@ const ServiceReporting = () => {
 																			<p className="w-[20%]">
 																				{subWasteTypesMap[summary.subWasteType] ?? summary.subWasteType ?? "--"}
 																			</p>
-																			<p
-																				className={`${
+																			<div
+																				className={`flex items-center gap-2 ${
 																					service.expectedItemOrService?.includes(summary.containerType)
 																						? ""
 																						: "text-red-500"
 																				} w-[30%]`}
 																			>
-																				{containersMap[summary.containerType] ?? "--"}
-																			</p>
+																				<p>{containersMap[summary.containerType] ?? "--"}</p>
+																				{!service.expectedItemOrService?.includes(summary.containerType) && (
+																					<BsFillInfoCircleFill
+																						size={14}
+																						className="text-cardTextGray"
+																						title="Out of Scope container was used while servicing this account"
+																					/>
+																				)}
+																			</div>
 																			<p className="w-[8%]">{summary.quantity ?? 1}</p>
-																			<p className="w-[10%]">{summary.weight}</p>
+																			<p className="w-[10%]">{weight.toFixed(2)}</p>
+																			<p className="w-[8%]">${rate?.toFixed(2)}</p>
+																			<p className="w-[8%]">${containerTotal?.toFixed(2)}</p>
 																			<p className="w-[8%]">
-																				${Number(summary.priceBookData?.pricePerPound).toFixed(2)}
+																				{summary.cost
+																					? `$${(
+																							Math.abs(Number(summary.cost)) / 100 +
+																							Number(summary?.containerWashingFee)
+																					  ).toFixed(2)}`
+																					: ""}
 																			</p>
-																			<p className="w-[8%]">
-																				$
-																				{(
-																					Number(summary.quantity ?? 1) *
-																					Number(summary.weight) *
-																					Number(summary.priceBookData?.pricePerPound)
-																				).toFixed(2)}
-																			</p>
-																			<p className="w-[8%]">{summary.cost ? `$${Number(summary.cost) / 100}` : ""}</p>
 																			<p className="w-[8%]"></p>
 																		</>
 																	)}
@@ -2207,7 +2355,7 @@ const ServiceReporting = () => {
 										handleEditClick={handleEditClick}
 										handleFieldChange={handleFieldChange}
 										handleNewDelContainerChange={handleNewDelContainerChange}
-										handleRemoveNewDelContainer={handleAddNewDelContainer}
+										handleRemoveNewDelContainer={handleRemoveNewDelContainer}
 										handleSave={handleSave}
 										newDelContainers={newDelContainers}
 										service={service}
@@ -2223,11 +2371,15 @@ const ServiceReporting = () => {
 										service={service}
 									/>
 								</div>
-								<PictureSection service={service} />
+								<PictureSection
+									service={service}
+									generatorData={{ id: service.genId, generatorName: service.generatorName }}
+									treatmentMap={treatmentMap}
+								/>
 							</div>
 						))}
 						{isLoadingMore && <Loader height="h-20 py-4 w-screen" />}
-						{!isLoading && !isLoadingMore && hasMore && filteredData.length && (
+						{!isLoading && !isLoadingMore && hasMore && filteredData.length > 0 && (
 							<div className="flex justify-center my-4 h-fit w-screen">
 								<button
 									onClick={loadMore}
@@ -2363,45 +2515,16 @@ const ServiceReporting = () => {
 				</div>
 			)}
 			{isDeleting && (
-				<div className="z-40 fixed inset-0 bg-mediumGray bg-opacity-50 flex justify-center items-center ">
-					<div className="modal-box">
-						<div>
-							<button
-								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-								type="button"
-								onClick={() => setIsDeleting(null)}
-							>
-								✕
-							</button>
-						</div>
-						<h3 className="font-bold text-lg">Are you sure?</h3>
-						<div className="flex py-5 gap-5 flex-col">
-							<p className="">You are about to delete container of this service!</p>
-						</div>
-						<div className="flex w-full justify-between">
-							<button type="button" className={`btn btn-error btn-sm`} onClick={() => setIsDeleting(null)}>
-								{"No"}
-							</button>
-							<button
-								className={`btn btn-primary btn-sm`}
-								type="button"
-								onClick={() => {
-									if (isDeleting.section === "service") {
-										handleDeleteContainer(isDeleting.serviceId, isDeleting.containerId);
-									} else if (isDeleting.section === "delivery") {
-										handleDeleteDelContainer(isDeleting.serviceId, isDeleting.containerId);
-									}
-								}}
-							>
-								{"Yes"}
-							</button>
-						</div>
-					</div>
-				</div>
+				<DeleteConfirmationModal
+					handleDeleteContainer={handleDeleteContainer}
+					handleDeleteDelContainer={handleDeleteDelContainer}
+					isDeleting={isDeleting}
+					setIsDeleting={setIsDeleting}
+				/>
 			)}
 			{showAddContainerModal && (
 				<NewContainerModalHandler
-					containerPriceBook={containerPriceBook}
+					serviceContainerPriceBook={serviceContainerPriceBook}
 					containersMap={containersMap}
 					editedData={editedData}
 					setEditedData={setEditedData}
@@ -2411,7 +2534,7 @@ const ServiceReporting = () => {
 					setShowAddContainerModal={setShowAddContainerModal}
 				/>
 			)}
-			{!isLoading && <CounterHandler totalCountData={totalCountData} />}
+			{!isLoading && <CounterHandler totalCountData={totalCountData} unavalogCount={unavalogCount} />}
 			<FooterActionItems servicesSelected={selectedRows} />
 		</div>
 	);
@@ -2419,11 +2542,51 @@ const ServiceReporting = () => {
 
 export default ServiceReporting;
 
+const DeleteConfirmationModal = ({ setIsDeleting, handleDeleteContainer, handleDeleteDelContainer, isDeleting }) => {
+	return (
+		<div className="z-40 fixed inset-0 bg-mediumGray bg-opacity-50 flex justify-center items-center ">
+			<div className="modal-box">
+				<div>
+					<button
+						className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+						type="button"
+						onClick={() => setIsDeleting(null)}
+					>
+						✕
+					</button>
+				</div>
+				<h3 className="font-bold text-lg">Are you sure?</h3>
+				<div className="flex py-5 gap-5 flex-col">
+					<p className="">You are about to delete container of this service!</p>
+				</div>
+				<div className="flex w-full justify-between">
+					<button type="button" className={`btn btn-error btn-sm`} onClick={() => setIsDeleting(null)}>
+						{"No"}
+					</button>
+					<button
+						className={`btn btn-primary btn-sm`}
+						type="button"
+						onClick={() => {
+							if (isDeleting.section === "service") {
+								handleDeleteContainer(isDeleting.serviceId, isDeleting.containerId);
+							} else if (isDeleting.section === "delivery") {
+								handleDeleteDelContainer(isDeleting.serviceId, isDeleting.containerId);
+							}
+						}}
+					>
+						{"Yes"}
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+};
+
 const NewContainerModalHandler = ({
 	newContainerData,
 	setNewContainerData,
 	containersMap,
-	containerPriceBook,
+	serviceContainerPriceBook,
 	editedData,
 	setEditedData,
 	setNewContainers,
@@ -2480,12 +2643,12 @@ const NewContainerModalHandler = ({
 							className="w-full p-2 border rounded"
 							value={newContainerData.containerType}
 							onChange={(e) => {
-								let subWasteType = containerPriceBook[e.target.value]?.subWasteType;
+								let subWasteType = serviceContainerPriceBook[e.target.value]?.subWasteType;
 								setNewContainerData((prev) => ({
 									...prev,
 									containerType: e.target.value,
 									subWasteType,
-									priceBookData: containerPriceBook[e.target.value] || null,
+									priceBookData: serviceContainerPriceBook[e.target.value] || null,
 								}));
 							}}
 						>
@@ -2641,7 +2804,7 @@ const NewContainerModalHandler = ({
 	);
 };
 
-const CounterHandler = ({ totalCountData }) => {
+const CounterHandler = ({ totalCountData, unavalogCount }) => {
 	return (
 		<div className="bg-whiteBlue font-medium h-fit p-4 px-10 w-full min-w-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
 			{Object.entries(totalCountData).map(([key, value]) => (
@@ -2654,6 +2817,16 @@ const CounterHandler = ({ totalCountData }) => {
 					<p className="font-normal">Weight: {Number(value.weight).toFixed(2)} (lbs)</p>
 				</div>
 			))}
+			{Object.values(unavalogCount).find((item) => Number(item) > 0) &&
+				Object.entries(unavalogCount).map(([key, value]) => (
+					<div className="flex gap-1" key={key}>
+						<p className="font-medium">
+							{key}
+							{"- "}{" "}
+						</p>
+						<p className="font-normal">{Number(value)}</p>
+					</div>
+				))}
 		</div>
 	);
 };
@@ -2675,8 +2848,33 @@ const DeliverySummaryContainer = ({
 	handleAddNewDelContainer,
 	handleRemoveNewDelContainer,
 }) => {
+	const deliverySummary = service?.deliverySummary ?? [];
+
+	console.log();
+
+	const combinedSummary = [
+		...deliverySummary,
+		...newDelContainers.map((c) => ({
+			quantity: Number(c.quantity) || 1,
+			salePrice: Number(delContainersMap?.[c.containerType]?.priceBookData?.salePrice || 0),
+		})),
+	];
+
+	const subTotal = combinedSummary.reduce(
+		(acc, curr) => {
+			const qty = Number(curr.quantity) || 1;
+			const rate = Number(curr?.priceBookData?.salePrice) || 0;
+			acc.quantity += qty;
+			acc.total += qty * rate;
+			return acc;
+		},
+		{ quantity: 0, total: 0 }
+	);
+
+	console.log({ editedData });
+
 	return (
-		<div className="w-[35%] border border-dashInActiveBtnText overflow-hidden">
+		<div className="w-[40%] border border-dashInActiveBtnText overflow-hidden">
 			<div className="bg-lightGray h-12 w-full flex items-center justify-center gap-2">
 				<h6 className="font-medium text-center">Delivery Summary</h6>
 				{editing.serviceId === service.id && editing.section === "delivery" ? (
@@ -2707,167 +2905,213 @@ const DeliverySummaryContainer = ({
 					)
 				)}
 			</div>
-			<div className="px-4 pb-2">
-				{service?.deliverySummary?.length > 0 && (
-					<div className="flex gap-2 text-left py-2 font-medium">
-						<p className="w-[50%]">Description</p>
-						<p className="w-[30%]">Usage</p>
-						<p className="w-[20%]">Quantity</p>
-						{editing.serviceId === service.id && editing.section === "delivery" && <p>Delete</p>}
-					</div>
-				)}
-
-				{service?.deliverySummary?.length > 0 && service?.deliveryReceipt && (
-					<button
-						className="text-left mr-1 hover:underline text-primary"
-						onClick={() => handleDeliveryView(service?.deliveryReceipt?.deliveryId, service?.deliveryReceipt?.url)}
-					>
-						{service?.deliveryReceipt?.deliveryOctoId ?? service?.deliveryReceipt?.deliveryId}
-					</button>
-				)}
-				{Array.isArray(service?.deliverySummary) ? (
-					service.deliverySummary?.map((summary, idx) => (
-						<div key={idx} className="flex gap-2 my-1 text-left">
-							{editing.serviceId === service.id && editing.section === "delivery" ? (
-								<>
-									{/* Container Type Dropdown */}
-									<select
-										value={editedData.deliverySummary[idx].containerType}
-										onChange={(e) =>
-											handleFieldChange(service.id, "deliverySummary", idx, "containerType", e.target.value)
-										}
-										className="w-[50%] max-w-[50%] border rounded p-0.5 px-1"
-									>
-										<option value="" disabled hidden></option>
-										{Object.entries(delContainersMap).map(([value, label]) => (
-											<option key={value} value={value}>
-												{label}
-											</option>
-										))}
-									</select>
-									{/* Usage Type Dropdown */}
-									<select
-										value={editedData.deliverySummary[idx].type}
-										onChange={(e) => handleFieldChange(service.id, "deliverySummary", idx, "type", e.target.value)}
-										className="w-[30%] max-w-[30%] border rounded p-0.5 px-1 capitalize"
-									>
-										<option value="" disabled hidden></option>
-										<option value="USE">Use</option>
-										<option value="SUPPLY">Supply</option>
-									</select>
-									{/* Quantity Input */}
-									<div className="w-[15%] p-0.5">
-										<input
-											className="w-16 border-b focus:outline-none px-1"
-											value={
-												editedData.deliverySummary[idx].quantity ? Number(editedData.deliverySummary[idx].quantity) : 1
-											}
-											type="number"
-											min={1}
-											onChange={(e) =>
-												handleFieldChange(
-													service.id,
-													"deliverySummary",
-													idx,
-													"quantity",
-													e.target.value ? e.target.value?.toString() : "1"
-												)
-											}
-											onKeyDown={(e) => {
-												if (e.key === "." || e.key === "e") {
-													e.preventDefault();
-												}
-											}}
-										/>
-									</div>
-									{editing.serviceId === service.id && editing.section === "delivery" && (
-										<button
-											onClick={() =>
-												setIsDeleting({
-													serviceId: service.id,
-													containerId: editedData.deliverySummary[idx].id,
-													section: "delivery",
-												})
-											}
-											className="text-red-500 hover:text-red-700 w-[5%]"
-										>
-											<BiTrash className="w-4 h-4" />
-										</button>
-									)}
-								</>
-							) : (
-								<>
-									<p className="w-[50%] p-0.5 px-1">{delContainersMap[summary?.containerType] ?? "--"}</p>
-									<p className="w-[30%] p-0.5 px-1 capitalize">{summary?.type ?? "--"}</p>
-									<p className="w-[15%] p-0.5 px-1.5">{summary.quantity}</p>
-									<p className="w-[5%] p-0.5 px-1.5"></p>
-								</>
+			{service?.deliverySummary?.length == 0 && service.noDelivery && (
+				<div className="w-full text-center py-1">
+					<p>No Delivery</p>
+				</div>
+			)}
+			<div className="flex flex-col flex-grow justify-between">
+				<div className="px-4 pb-2">
+					{service?.deliverySummary?.length > 0 && (
+						<div className="flex gap-2 text-left py-2 font-medium">
+							<p className="w-[40%]">Description</p>
+							<p className="w-[15%]">Usage</p>
+							<p className="w-[15%] text-center">Quantity</p>
+							<p className="w-[10%] text-center">Rate</p>
+							<p className="w-[10%] text-center">Total</p>
+							{editing.serviceId !== service.id && <p className="w-[10%] text-center"></p>}
+							{editing.serviceId === service.id && editing.section === "delivery" && (
+								<p className="w-[10%] text-center">Delete</p>
 							)}
 						</div>
-					))
-				) : (
-					<div className="w-full text-center py-2 text-secondary">
-						<p>No data found</p>
-					</div>
-				)}
-				{newDelContainers.map((delContainer, idx) => (
-					<div key={delContainer.tempId} className="flex gap-2 h-7 my-1 text-left items-center">
-						<select
-							value={delContainer.containerType}
-							onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "containerType", e.target.value)}
-							className="w-[50%] max-w-[50%] border rounded p-0.5 px-1"
-						>
-							<option value="" disabled hidden></option>
-							{Object.entries(delContainersMap).map(([value, label]) => (
-								<option key={value} value={value}>
-									{label}
-								</option>
-							))}
-						</select>
-						{/* Usage Type Dropdown */}
-						<select
-							value={delContainer.type}
-							onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "type", e.target.value)}
-							className="w-[30%] max-w-[30%] border rounded p-0.5 px-1 capitalize"
-						>
-							<option value="" disabled hidden></option>
-							<option value="USE">Use</option>
-							<option value="SUPPLY">Supply</option>
-						</select>
-						{/* Quantity Input */}
-						<div className="w-[15%] p-0.5">
-							<input
-								className="w-16 border-b focus:outline-none px-1"
-								value={delContainer.quantity ? Number(delContainer.quantity) : 1}
-								type="number"
-								min={1}
-								onChange={(e) =>
-									handleNewDelContainerChange(
-										delContainer.tempId,
-										"quantity",
-										e.target.value ? e.target.value?.toString() : "1"
-									)
-								}
-								onKeyDown={(e) => {
-									if (e.key === "." || e.key === "e") {
-										e.preventDefault();
-									}
-								}}
-							/>
+					)}
+
+					{service?.deliverySummary?.length > 0 &&
+						service?.deliveryReceipt &&
+						service?.deliveryReceipt?.deliveryOctoId && (
+							<button
+								className="text-left mr-1 hover:underline text-primary"
+								onClick={() => handleDeliveryView(service?.deliveryReceipt?.deliveryId, service?.deliveryReceipt?.url)}
+							>
+								{service?.deliveryReceipt?.deliveryOctoId}
+							</button>
+						)}
+					{Array.isArray(service?.deliverySummary) ? (
+						service.deliverySummary?.map((summary, idx) => {
+							console.log({ summary });
+							let rate = Number(summary.priceBookData?.salePrice ?? 0);
+							let total = rate * Number(summary.quantity ?? 1);
+							return (
+								<div key={idx} className="flex gap-2 my-1 text-left">
+									{editing.serviceId === service.id && editing.section === "delivery" ? (
+										<>
+											{/* Container Type Dropdown */}
+											<select
+												value={editedData.deliverySummary[idx].containerType}
+												onChange={(e) =>
+													handleFieldChange(service.id, "deliverySummary", idx, "containerType", e.target.value)
+												}
+												className="w-[40%] max-w-[40%] border rounded"
+											>
+												<option value="" disabled hidden></option>
+												{Object.entries(delContainersMap).map(([value, label]) => (
+													<option key={value} value={value}>
+														{label}
+													</option>
+												))}
+											</select>
+											{/* Usage Type Dropdown */}
+											<select
+												value={editedData.deliverySummary[idx].type}
+												onChange={(e) => handleFieldChange(service.id, "deliverySummary", idx, "type", e.target.value)}
+												className="w-[15%] max-w-[15%] border rounded capitalize"
+											>
+												<option value="" disabled hidden></option>
+												<option value="USE">Use</option>
+												<option value="SUPPLY">Supply</option>
+											</select>
+											{/* Quantity Input */}
+											<div className="w-[15%] flex items-center justify-center">
+												<input
+													className="w-16 border-b focus:outline-none"
+													value={
+														editedData.deliverySummary[idx].quantity
+															? Number(editedData.deliverySummary[idx].quantity)
+															: 1
+													}
+													type="number"
+													min={1}
+													onChange={(e) =>
+														handleFieldChange(
+															service.id,
+															"deliverySummary",
+															idx,
+															"quantity",
+															e.target.value ? e.target.value?.toString() : "1"
+														)
+													}
+													onKeyDown={(e) => {
+														if (e.key === "." || e.key === "e") {
+															e.preventDefault();
+														}
+													}}
+												/>
+											</div>
+											<div className="w-[10%] text-center">${isNaN(rate) ? "" : rate?.toFixed(2)}</div>
+											<div className="w-[10%] text-center">${isNaN(total) ? "" : total?.toFixed(2)}</div>
+											<div className="w-[10%] flex items-center justify-center">
+												{editing.serviceId === service.id && editing.section === "delivery" && (
+													<button
+														onClick={() =>
+															setIsDeleting({
+																serviceId: service.id,
+																containerId: editedData.deliverySummary[idx].id,
+																section: "delivery",
+															})
+														}
+														className="text-red-500 hover:text-red-700"
+													>
+														<BiTrash className="w-4 h-4" />
+													</button>
+												)}
+											</div>
+										</>
+									) : (
+										<>
+											<p className="w-[40%] max-w-[40%]">{delContainersMap[summary?.containerType] ?? "--"}</p>
+											<p className="w-[15%] capitalize">{summary?.type ?? "--"}</p>
+											<p className="w-[15%] text-center">{summary.quantity ?? 1}</p>
+											<p className="w-[10%] text-center">${isNaN(rate) ? "" : rate?.toFixed(2)}</p>
+											<p className="w-[10%] text-center">${isNaN(total) ? "" : total?.toFixed(2)}</p>
+											<p className="w-[10%] text-center"></p>
+										</>
+									)}
+								</div>
+							);
+						})
+					) : (
+						<div className="w-full text-center py-2 text-secondary">
+							<p>No data found</p>
 						</div>
-						<button
-							onClick={() => handleRemoveNewDelContainer(delContainer.tempId)}
-							className="text-red-500 hover:text-red-700 w-[5%]"
-						>
-							<BiTrash className="w-4 h-4" />
-						</button>
-					</div>
-				))}
-				{editing.serviceId === service.id && editing.section === "delivery" && (
-					<div className="flex gap-2 mt-2">
-						<button className="text-primary text-sm" onClick={() => handleAddNewDelContainer(service.id)}>
-							+ Add Container
-						</button>
+					)}
+					{newDelContainers.map((delContainer, idx) => {
+						console.log({ delContainer });
+						let rate = 0;
+						let total = 0;
+						return (
+							<div key={delContainer.tempId} className="flex gap-2 h-7 my-1 text-left items-center">
+								<select
+									value={delContainer.containerType}
+									onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "containerType", e.target.value)}
+									className="w-[40%] max-w-[40%] border rounded"
+								>
+									<option value="" disabled hidden></option>
+									{Object.entries(delContainersMap).map(([value, label]) => (
+										<option key={value} value={value}>
+											{label}
+										</option>
+									))}
+								</select>
+								{/* Usage Type Dropdown */}
+								<select
+									value={delContainer.type}
+									onChange={(e) => handleNewDelContainerChange(delContainer.tempId, "type", e.target.value)}
+									className="w-[15%] max-w-[15%] border rounded px-1 capitalize"
+								>
+									<option value="" disabled hidden></option>
+									<option value="USE">Use</option>
+									<option value="SUPPLY">Supply</option>
+								</select>
+								{/* Quantity Input */}
+								<div className="w-[15%] flex items-center justify-center">
+									<input
+										className="w-16 border-b focus:outline-none"
+										value={delContainer.quantity ? Number(delContainer.quantity) : 1}
+										type="number"
+										min={1}
+										onChange={(e) =>
+											handleNewDelContainerChange(
+												delContainer.tempId,
+												"quantity",
+												e.target.value ? e.target.value?.toString() : "1"
+											)
+										}
+										onKeyDown={(e) => {
+											if (e.key === "." || e.key === "e") {
+												e.preventDefault();
+											}
+										}}
+									/>
+								</div>
+								<div className="w-[10%] text-center">${isNaN(rate) ? "" : rate?.toFixed(2)}</div>
+								<div className="w-[10%] text-center">${isNaN(total) ? "" : total?.toFixed(2)}</div>
+								<div className="w-[10%] flex items-center justify-center">
+									<button
+										onClick={() => handleRemoveNewDelContainer(delContainer.tempId)}
+										className="text-red-500 hover:text-red-700"
+									>
+										<BiTrash className="w-4 h-4" />
+									</button>
+								</div>
+							</div>
+						);
+					})}
+					{editing.serviceId === service.id && editing.section === "delivery" && (
+						<div className="flex gap-2 mt-2">
+							<button className="text-primary text-sm" onClick={() => handleAddNewDelContainer(service.id)}>
+								+ Add Container
+							</button>
+						</div>
+					)}
+				</div>
+				{service?.deliverySummary?.length > 0 && (
+					<div className="flex items-center gap-2 text-left font-semibold bg-gray-50 p-1 px-4">
+						<p className="w-[40%]">Subtotal:</p>
+						<p className="w-[15%]"></p>
+						<p className="w-[15%] text-center">{subTotal.quantity}</p>
+						<p className="w-[10%]"></p>
+						<p className="w-[10%] text-center">${subTotal.total.toFixed(2)}</p>
+						<p className="w-[10%]"></p>
 					</div>
 				)}
 			</div>
@@ -3045,14 +3289,23 @@ const FilterComp = ({
 	setSelectedTransStatusOptions,
 	setSelectedServiceStatusOptions,
 	setDateFilterManuallyChanged,
+	setSelectedSubWastes,
+	selectedSubWastes,
+	subWasteTypeOptions,
+	approvalOptions,
+	approvalOptionsForDropdown,
+	setSelectedApproved,
+	selectedApproved,
 }) => {
 	const clearFilters = () => {
 		setSearchQuery("");
 		setTo(() => new Date());
 		setFrom(() => new Date());
 		setSelectedRoutes(["all", ...routeOptions.map((item) => item.value)]);
+		setSelectedApproved(["all", ...approvalOptionsForDropdown.map((item) => item.value)]);
 		setSelectedDrivers(["all", ...driverOptions.map((item) => item.value)]);
 		setSelectedServices(["all", ...serviceTypeOptions.map((item) => item.value)]);
+		setSelectedSubWastes(["all", ...subWasteTypeOptions.map((item) => item.value)]);
 		setSelectedTransStatusOptions([...transStatusOptions.map((item) => item.value)]);
 		setSelectedServiceStatusOptions([...serviceStatusOptions.map((item) => item.value)]);
 	};
@@ -3079,6 +3332,7 @@ const FilterComp = ({
 					<div className="flex flex-col min-w-52">
 						<p className="text-sm text-gray-500 px-2">From</p>
 						<CustomDatePicker
+							disableFutureDates={true}
 							selectedDate={from}
 							setSelectedDate={(value) => {
 								setFrom(new Date(value));
@@ -3090,6 +3344,7 @@ const FilterComp = ({
 					<div className="flex flex-col min-w-52">
 						<p className="text-sm text-gray-500 px-2">To</p>
 						<CustomDatePicker
+							disableFutureDates={true}
 							selectedDate={to}
 							setSelectedDate={(value) => {
 								setTo(new Date(value));
@@ -3103,6 +3358,20 @@ const FilterComp = ({
 						options={serviceTypeOptions}
 						selectedOptions={selectedServices}
 						onSelectedOptionsChange={(values) => setSelectedServices(values)}
+					/>
+					<MultiselectDropdown
+						width="w-48"
+						buttonText="Subwaste Type"
+						options={subWasteTypeOptions}
+						selectedOptions={selectedSubWastes}
+						onSelectedOptionsChange={(values) => setSelectedSubWastes(values)}
+					/>
+					<MultiselectDropdown
+						width="w-48"
+						buttonText="Approval"
+						options={approvalOptions}
+						selectedOptions={selectedApproved}
+						onSelectedOptionsChange={(values) => setSelectedApproved(values)}
 					/>
 					<MultiselectDropdown
 						width="w-48"
@@ -3152,7 +3421,9 @@ const FilterComp = ({
 	);
 };
 
-const PictureSection = ({ service }) => {
+const PictureSection = ({ service, generatorData, treatmentMap }) => {
+	console.log({ generatorData, service });
+
 	return (
 		<div className="flex flex-col px-10 py-6">
 			<div className="flex justify-between">
@@ -3170,15 +3441,15 @@ const PictureSection = ({ service }) => {
 				</div>
 				<div className="flex gap-4 w-[18%]">
 					<p className="w-32 font-medium">Contractor:</p>
-					<p>{service?.additional?.contractor}</p>
+					<p>{service?.contractorName}</p>
 				</div>
 			</div>
 			<div className="flex justify-between">
 				<div>
-					{service?.tempServiceIns?.length && (
+					{service?.tempServiceIns?.length > 0 && (
 						<div className="flex gap-4">
-							<p className="text-nowrap w-32 font-red-500 font-medium">Temporary Service Instructions:</p>
-							<p>{service?.tempServiceIns}</p>
+							<p className="text-nowrap w-60 font-red-500 font-medium">Temporary Service Instructions:</p>
+							<p className="w-full max-w-96 text-wrap text-red-500">{service?.tempServiceIns}</p>
 						</div>
 					)}
 					<div className="flex gap-4">
@@ -3188,7 +3459,13 @@ const PictureSection = ({ service }) => {
 				</div>
 				<div className="flex gap-4 w-[18%] h-fit">
 					<p className="text-nowrap min-w-32 font-medium">Subcontractor:</p>
-					<p>{service?.additional?.subcontractor}</p>
+					<p>{service?.subcontractorName}</p>
+				</div>
+			</div>
+			<div className="flex justify-end">
+				<div className="flex gap-4 w-[18%] h-fit">
+					<p className="text-nowrap min-w-32 font-medium">TS/TF:</p>
+					<p>{treatmentMap?.[service?.treatmentId]}</p>
 				</div>
 			</div>
 		</div>
@@ -3208,8 +3485,10 @@ const DataTable = ({ service, selectedRows, handleRowCheckbox, transporterData }
 			</div>
 			<div className="flex items-center">
 				<div className="truncate w-60">
-					{service.completedViaServiceHistoryPage
-						? formatUtcDateTimeString(service.completedAt?.toDate()?.toUTCString())
+					{service.markedAsClosedAt
+						? formattedDateTime(service.markedAsClosedAt)
+						: service.canceledAt
+						? formattedDateTime(service.canceledAt)
 						: service.completedAt
 						? formattedDateTime(service.completedAt)
 						: formatUtcDateString(service.date.toDate().toUTCString())}
@@ -3223,7 +3502,18 @@ const DataTable = ({ service, selectedRows, handleRowCheckbox, transporterData }
 				<div className="truncate w-40">{service.pickUpTruck}</div>
 				<div className="truncate w-52">{service.driverName}</div>
 				<div className="truncate w-48">{transporterData?.transporterOctoId}</div>
-				<div className="truncate w-48">{capitalizeFirstLetter(service?.serviceStatus)}</div>
+				<div className="truncate w-48 flex items-center gap-1">
+					{capitalizeFirstLetter(service?.serviceStatus)}
+					{service?.earlierStatus?.length > 0 && (
+						<BsFillInfoCircleFill
+							size={14}
+							className="text-cardTextGray"
+							title={`This was ${
+								service.earlierStatus === "CANCELED" ? "a" : "an"
+							} ${service.earlierStatus.toLowerCase()} service`}
+						/>
+					)}
+				</div>
 				<div className="truncate w-40 text-center">
 					{service.completedAt
 						? service.transferStatus == TRANSFER_STATUS.COMPLETE
@@ -3236,34 +3526,113 @@ const DataTable = ({ service, selectedRows, handleRowCheckbox, transporterData }
 	);
 };
 
-const ManifestMapper = ({ service }) => {
-	return (
-		<div className="flex text-sm justify-center">
-			<span>
-				{service?.manifestData?.[0]?.manifestOctoId?.slice(0, service?.manifestData?.[0]?.manifestOctoId?.length - 2)}
-			</span>
-			{service.manifestData?.map((manifest, index) => (
-				<button
-					key={manifest?.id}
-					className="text-center mr-1 hover:underline text-primary"
-					onClick={() => handleManifestView(manifest.id, manifest.url)}
-				>
-					{manifest?.manifestOctoId?.slice(manifest?.manifestOctoId?.length - 2, manifest?.manifestOctoId?.length)}
-					{index < service.manifestData?.length - 1 ? ", " : ""}
-				</button>
-			))}
-		</div>
-	);
-};
+const processedServiceData = ({
+	serviceData,
+	generatorDataRef,
+	generatorData,
+	transData,
+	routeRes,
+	routeData,
+	serviceTypeString,
+	user,
+	manifestData,
+	serviceSummary,
+	deliverySummary,
+	deliveryReceipt,
+	transporterData,
+}) => {
+	// Scheduled by
+	const scheduledBy = serviceData?.transporterId;
 
-function formatDateToMMDDYYYY(date) {
-	if (!(date instanceof Date)) {
-		throw new Error("Invalid date object");
+	const isSubContracted = scheduledBy != user?.uid;
+
+	console.log({ scheduledBy, isSubContracted, userId: user?.uid, generatorData });
+
+	let resp = {
+		id: serviceData.id,
+		date: serviceData.date,
+		completedAt: serviceData.completedAt,
+		time: serviceData.date?.toDate(),
+		driverNote: serviceData?.driverNote?.length > 0 ? serviceData?.driverNote : "--",
+		tempServiceIns: serviceData?.temporaryServiceInstruction,
+		customerId: generatorDataRef.id,
+		generatorId: generatorData.id,
+		serviceId: serviceData.id,
+		completedViaServiceHistoryPage: Boolean(serviceData.completedViaServiceHistoryPage),
+		scheduleId: serviceData.serviceScheduleId,
+		generatorName: `${generatorData?.generatorName ?? "--"} `,
+		email: generatorData.serviceAddress?.email?.length ? generatorData.serviceAddress?.email : "--",
+		phone: generatorData.serviceAddress?.phone?.length ? generatorData.serviceAddress?.phone : "",
+		internalAccountNumber: generatorData.internalAccountNumber?.length ? generatorData.internalAccountNumber : "--",
+		genId: generatorData.id,
+		expectedItemOrService: serviceData.scheduleData
+			? serviceData.scheduleData?.expectedItemOrService
+				? serviceData.scheduleData?.expectedItemOrService?.map((e) => e.item)
+				: []
+			: [],
+		driverId: serviceData.assignedDriverId,
+		deliveryId: transData.length > 0 ? transData?.[0].id : null,
+		octoNumber: octoFormatter(generatorData.octoNumber) ?? "--",
+		address: getFormattedAddress(generatorData?.serviceAddress),
+		billed: Boolean(serviceData?.billed),
+		billingMethod: serviceData?.billingMethod,
+		billingNote: serviceData?.billingNote,
+		billedDate: serviceData?.billedDate?.toDate()?.toLocaleDateString() ?? null,
+		paidDate: serviceData?.paidDate?.toDate()?.toLocaleDateString() ?? null,
+		approvedDate: serviceData?.approvedDate?.toDate()?.toLocaleDateString() ?? null,
+		approvedNote: serviceData?.approvedNote,
+		approved: serviceData?.approved ? true : false,
+		paid: serviceData?.paid ?? false,
+		noDelivery: Boolean(serviceData.noDelivery),
+		contractorName: isSubContracted
+			? generatorData?.subContractors?.find((item) => item.id == scheduledBy)?.subContractorName
+			: transporterData?.transporterName,
+		subContractorName: isSubContracted
+			? generatorData?.subContractors?.find((item) => item.id == scheduledBy)?.name
+			: "",
+		adminNote: serviceData?.adminNote ?? "",
+		paidAmount: serviceData?.paidAmount ?? "--",
+		picture: Array.isArray(serviceData?.serviceImages) ? serviceData?.serviceImages : [],
+		optionChecked: false,
+		driverName: `${serviceData?.assignedDriverName ?? "--"}`,
+		pickUpTruck: `${serviceData?.assignedServiceVehicleName ?? "--"}`,
+		serviceType: serviceTypeString ?? "--",
+		routeName: routeData?.routeLabel ?? "--",
+		routeId: routeRes.id ?? "--",
+		quantity: "--",
+		totalWeight: "--",
+		serviceVehicleId: serviceData.assignedServiceVehicleId,
+		transporterId: user.uid,
+		earlierStatus: serviceData?.earlierStatus ?? "",
+		serviceStatus:
+			serviceData?.status === SERVICE_STATUS.PENDING || serviceData?.status === SERVICE_STATUS.INPROGRESS
+				? "UNLOGGED"
+				: serviceData?.status === SERVICE_STATUS.COMPLETE
+				? "COMPLETE"
+				: serviceData?.status === SERVICE_STATUS.CLOSED
+				? "UNAVAILABLE"
+				: serviceData?.status === SERVICE_STATUS.CANCELLED
+				? "CANCELED"
+				: "",
+		transferStatus: serviceData?.transferStatus,
+		treatmentId: serviceData?.transferStatus === "COMPLETE" ? serviceData.transferredContainers?.[0]?.treatmentId : "",
+		transferredContainers: serviceData.transferredContainers ?? [],
+		subWasteType: serviceSummary.length > 0 ? [...new Set(serviceSummary.map((item) => item?.subWasteType))] : [],
+		serviceSummary,
+		deliverySummary,
+		deliveryReceipt,
+		noWaste: serviceData?.noWaste,
+		manifestData: manifestData?.filter(
+			(manifest, index, self) => index === self.findIndex((m) => m.manifestOctoId === manifest.manifestOctoId)
+		),
+		markedAsClosedAt: serviceData?.status === SERVICE_STATUS.CLOSED ? serviceData?.markedAsClosedAt?.toDate() : null,
+		canceledAt:
+			serviceData?.status === SERVICE_STATUS.CANCELLED
+				? (serviceData?.canceledAt ?? serviceData?.cancelledAt)?.toDate()
+				: null,
+	};
+	if (serviceData.generatorId == "Tf7tyAV0CAeTE9Ub3JZQ") {
+		console.log({ resp });
 	}
-
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	const year = date.getFullYear();
-
-	return `${month}${day}${year}`;
-}
+	return resp;
+};
