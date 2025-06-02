@@ -1,0 +1,2432 @@
+delete process.env.FIRESTORE_EMULATOR_HOST;
+
+import {
+    onDocumentCreated,
+    onDocumentCreatedWithAuthContext,
+    onDocumentDeleted,
+    onDocumentDeletedWithAuthContext,
+    onDocumentUpdated,
+    onDocumentUpdatedWithAuthContext,
+} from "firebase-functions/v2/firestore";
+import {
+    FieldValue,
+    Timestamp,
+    initializeFirestore,
+} from "firebase-admin/firestore";
+import {
+    formatDateToMMDDYYYY,
+    formattedDate,
+    getScheduledDates,
+    splitArrayIntoChunks,
+    updateTransporterIndustryCount,
+} from "./helper.js";
+import { getStorage } from "firebase-admin/storage";
+
+import { onCall, onRequest } from "firebase-functions/v2/https";
+import {
+    scheduledServiceStatus,
+    LOCATION_TYPE,
+    transferStatusType,
+    restRoutingRequestUrl,
+} from "./constants.js";
+import { Client, TravelMode } from "@googlemaps/google-maps-services-js";
+
+import dotenv from "dotenv";
+import { initializeApp } from "firebase-admin/app";
+
+import pkg from "@googlemaps/polyline-codec";
+import admin from "firebase-admin";
+
+import {
+    addServiceToDailyRoute,
+    removeServiceFromDailyRoute,
+} from "./serviceHandlers.js";
+import { getAuth } from "firebase-admin/auth";
+import {
+    generateRouteSheetPdf,
+    updateRouteCoordinates,
+} from "./routeHandlers.js";
+import { services } from "./defaultServices.js";
+import {
+    createManifestOctoIdHandler,
+    getManifestHandler,
+} from "./manifestHandler.js";
+import { sendEmailHandler } from "./emailHandlers.js";
+import { emailTemplates } from "./defaultEmailTemplates.js";
+import { products } from "./defaultProducts.js";
+import {
+    createDeliveryIdHandler,
+    getDeliveryHandler,
+} from "./deliveryHandler.js";
+import { PDFDocument } from "pdf-lib";
+import { v4 as uuidv4 } from "uuid";
+import moment from "moment-timezone";
+import {
+    handleFrequencyChange,
+    updateAllServicesRouteId,
+} from "./scheduleHandlers.js";
+import { onSchedule } from "firebase-functions/scheduler";
+import { testScheduleHandler } from "./cronJobHandlers.js";
+import {
+    onDailyRouteCreated,
+    onDailyRouteUpdated,
+} from "./dailyRouteHandlers.js";
+import { transferManifestHandler } from "./transferManifestHandler.js";
+import { find } from "geo-tz";
+import { getCustomerDataInJson } from "./migrationhandler.js";
+import { optimizeRoute } from "./routeOptimizationHandler.js";
+import { createAuditLog } from "./auditLog.js";
+import { transferOctoInGenerator } from "./transferHandler.js";
+dotenv.config();
+const { decode } = pkg;
+
+const app = initializeApp({
+    storageBucket: "routes-123.appspot.com",
+});
+const auth = getAuth(app);
+const storage = getStorage(app);
+export const storageUrl =
+    "https://firebasestorage.googleapis.com/v0/b/routes-123.appspot.com/o";
+
+export const dbDev = initializeFirestore(app, {}, process.env.DEV_FIRESTORE_ID);
+export const dbProd = initializeFirestore(
+    app,
+    {},
+    process.env.PROD_FIRESTORE_ID
+);
+export const GOOGLE_MAPS_SERVER_KEY = process.env.GOOGLE_MAPS_SERVER_KEY;
+
+const client = new Client({});
+export const COLLECTIONS = {
+    users: "users",
+    dashboardCounts: "dashboardCounts",
+    generatorContacts: "generatorContacts",
+    auditLogs: "auditLogs",
+    scheduledServices: "scheduledServices",
+    generators: "generators",
+    routes: "routes",
+    drivers: "drivers",
+    serviceSchedules: "serviceSchedules",
+    treatments: "treatments",
+    path: "path",
+    vendors: "vendors",
+    satelliteLocation: "satelliteLocation",
+    serviceVehicles: "serviceVehicles",
+    dailyRoutes: "dailyRoutes",
+    defaultPriceBook: "defaultPriceBook",
+    containers: "containers",
+    manifests: "manifests",
+    configurations: "configurations",
+    transporters: "transporters",
+    servicedContainers: "servicedContainers",
+    defaultEmailTemplates: "defaultEmailTemplates",
+    emailTemplates: "emailTemplates",
+    deliveredContainers: "deliveredContainers",
+    deliveries: "deliveries",
+    transfers: "transfers",
+    manifestCounters: "manifestCounters",
+    deliveryCounters: "deliveryCounters",
+    counters: "counters",
+};
+
+export const testSchedule = onSchedule(
+    {
+        schedule: "30 0 * * *",
+        timeZone: "America/Los_Angeles",
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (event) => {
+        // testScheduleHandler(event, dbDev);
+        try {
+            testScheduleHandler(event, dbDev);
+        } catch (error) {
+            console.log("Error in testSchedule:", error);
+        }
+        try {
+            testScheduleHandler(event, dbProd);
+        } catch (error) {
+            console.log("Error in testSchedule:", error);
+        }
+    }
+);
+
+export const test = onRequest(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        testScheduleHandler(null, dbProd, response);
+    }
+);
+
+// export const test = onRequest(
+//     {
+//         memory: "2GiB",
+//         timeoutSeconds: 540,
+//         cors: true,
+//         concurrency: 20,
+//         region: "us-central1",
+//         minInstances: 0,
+//         maxInstances: 5,
+//         serviceAccount:
+//             "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+//     },
+//     async (request, response) => {
+//         const transporterId = "RfGhg2KElbYwWqF9LGbec3kBSHv2";
+//         const generatorListFileName = "zuluCustomers.csv";
+//         const db = dbDev;
+//         getCustomerDataInJson(
+//             request,
+//             response,
+//             db,
+//             transporterId,
+//             generatorListFileName
+//         );
+//     }
+// );
+
+// export const test = onRequest(
+//     {
+//         memory: "2GiB",
+//         timeoutSeconds: 540,
+//         cors: true,
+//         concurrency: 20,
+//         region: "us-central1",
+//         minInstances: 0,
+//         maxInstances: 5,
+//         serviceAccount:
+//             "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+//     },
+//     async (request, response) => {
+//         try {
+//             const db = dbDev;
+//             console.log("Fetching service schedules...");
+//             const scheduleRes = await db
+//                 .collection(COLLECTIONS.serviceSchedules)
+//                 .get();
+//             const scheduleData = scheduleRes.docs.map((doc) => ({
+//                 ...doc.data(),
+//                 id: doc.id,
+//             }));
+
+//             console.log(`Processing ${scheduleData.length} schedules...`);
+//             let processedCount = 0;
+
+//             // Process all schedules with Promise.all to wait for all operations to complete
+//             await Promise.all(
+//                 scheduleData.map(async (schedule) => {
+//                     const scheduleId = schedule.id;
+//                     let transporterId = schedule?.transporterId ?? null;
+
+//                     if (!transporterId) {
+//                         const generatorRes = await db
+//                             .collection(COLLECTIONS.generators)
+//                             .doc(schedule.generatorId)
+//                             .get();
+//                         if (generatorRes.exists) {
+//                             const generatorData = generatorRes.data();
+//                             transporterId =
+//                                 generatorData?.transporterId ?? null;
+//                         }
+//                     }
+
+//                     if (transporterId) {
+//                         const serviceRes = await db
+//                             .collection(COLLECTIONS.scheduledServices)
+//                             .where("serviceScheduleId", "==", scheduleId)
+//                             .get();
+//                         const serviceData = serviceRes.docs.map((doc) => ({
+//                             ...doc.data(),
+//                             id: doc.id,
+//                         }));
+
+//                         // Update schedule with transporterId
+//                         await db
+//                             .collection(COLLECTIONS.serviceSchedules)
+//                             .doc(scheduleId)
+//                             .update({
+//                                 transporterId,
+//                             });
+
+//                         // Update all services using Promise.all
+//                         await Promise.all(
+//                             serviceData.map(async (service) => {
+//                                 const serviceId = service.id;
+//                                 console.log("serviceId", serviceId);
+
+//                                 await db
+//                                     .collection(COLLECTIONS.scheduledServices)
+//                                     .doc(serviceId)
+//                                     .update({
+//                                         transporterId,
+//                                     });
+//                             })
+//                         );
+
+//                         processedCount++;
+//                     }
+//                 })
+//             );
+
+//             console.log(`Processed ${processedCount} schedules successfully.`);
+//             response.json({
+//                 message: "done",
+//                 processed: processedCount,
+//                 total: scheduleData.length,
+//             });
+//         } catch (error) {
+//             console.error("Error processing schedules:", error);
+//             response.status(500).json({ error: "Internal server error" });
+//         }
+//     }
+// );
+
+export const emailUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/emails/{emailId}",
+    },
+    async (event) => {
+        const emailId = event.params.emailId;
+        const newData = event.data.after.data() || null;
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        console.log({ emailId, newData });
+        return;
+    }
+);
+
+export const manifestCreatedTest = onRequest(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        const manifestId = request.query.manifestId;
+        const environment = request.query.environment;
+        const db = environment === "production" ? dbProd : dbDev;
+        const manifestRes = await db
+            .collection(COLLECTIONS.manifests)
+            .doc(manifestId)
+            .get();
+        if (!manifestRes.exists) {
+            console.log("Manifest not found.");
+            return null;
+        }
+        const manifestData = manifestRes.data();
+        manifestData.id = manifestRes.id;
+        createManifestOctoIdHandler(db, manifestData);
+        response.json({
+            message: `Request received ${manifestId} ${environment}`,
+        });
+        return;
+    }
+);
+export const defaultEmailTemplatesSetup = onRequest(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        emailTemplates.forEach(async (template) => {
+            dbDev
+                .collection(COLLECTIONS.emailTemplates)
+                .doc("l8RkB1Dt8yX1lHwL49K4ze1jsxK2")
+                .collection("templates")
+                .doc(template.id)
+                .set(template);
+        });
+    }
+);
+export const routeSheetGenerator = onRequest(
+    {
+        memory: "4GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        const { environment } = request.query;
+        const { data, stringTemplate: routeSheetTemplateString } = request.body;
+        console.log({ data, routeSheetTemplateString });
+
+        generateRouteSheetPdf(
+            data,
+            routeSheetTemplateString,
+            storage,
+            storageUrl,
+            response,
+            environment
+        );
+    }
+);
+
+export const deliveryCreateHandler = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/deliveries/{deliveryId}",
+    },
+    async (event) => {
+        const deliveryId = event.params.deliveryId;
+        const databaseId = event.database;
+        const newData = event.data.data() || null;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        if (!newData) return;
+        createDeliveryIdHandler(db, { ...newData, id: deliveryId });
+        return;
+    }
+);
+export const deliveryCreateHandlerProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/deliveries/{deliveryId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const deliveryId = event.params.deliveryId;
+        const databaseId = event.database;
+        const newData = event.data.data() || null;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        if (!newData) return;
+        createDeliveryIdHandler(db, { ...newData, id: deliveryId });
+        return;
+    }
+);
+
+export const manifestCreateHandler = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/manifests/{manifestId}",
+    },
+    async (event) => {
+        const manifestId = event.params.manifestId;
+        const databaseId = event.database;
+        const newData = event.data.data() || null;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        if (!newData) return;
+        createManifestOctoIdHandler(db, { ...newData, id: manifestId });
+        return;
+    }
+);
+export const manifestCreateHandlerProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/manifests/{manifestId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const manifestId = event.params.manifestId;
+        const databaseId = event.database;
+        const newData = event.data.data() || null;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        if (!newData) return;
+        createManifestOctoIdHandler(db, { ...newData, id: manifestId });
+        return;
+    }
+);
+
+export const dailyRouteUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/routes/{routeId}/dailyRoutes/{dailyRouteId}",
+    },
+    async (event) => {
+        const routeId = event.params.routeId;
+        const dailyRouteId = event.params.dailyRouteId;
+        const databaseId = event.database;
+        const newData = event.data.after.data() || null;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        onDailyRouteUpdated(event, db);
+        return;
+    }
+);
+export const dailyRouteUpdateHandlerProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/routes/{routeId}/dailyRoutes/{dailyRouteId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const routeId = event.params.routeId;
+        const dailyRouteId = event.params.dailyRouteId;
+        const databaseId = event.database;
+        const newData = event.data.after.data() || null;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        onDailyRouteUpdated(event, db);
+        return;
+    }
+);
+
+export const dailyRouteCreateHandler = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/routes/{routeId}/dailyRoutes/{dailyRouteId}",
+    },
+    async (event) => {
+        const routeId = event.params.routeId;
+        const dailyRouteId = event.params.dailyRouteId;
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        onDailyRouteCreated(event, db);
+        return;
+    }
+);
+export const dailyRouteCreateHandlerProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "/routes/{routeId}/dailyRoutes/{dailyRouteId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const routeId = event.params.routeId;
+        const dailyRouteId = event.params.dailyRouteId;
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        onDailyRouteCreated(event, db);
+        return;
+    }
+);
+
+export const containerUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "containers/{containerId}",
+    },
+    async (event) => {
+        const containerId = event.params.containerId;
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        db.collection(COLLECTIONS.manifests)
+            .where("containers", "array-contains", containerId)
+            .get()
+            .then((res) => {
+                if (!res.docs.length) {
+                    console.log("No matching documents.");
+                    return;
+                }
+                res.docs.forEach((el) => {
+                    el.ref.update({ url: "" });
+                });
+            });
+    }
+);
+export const containerUpdateHandlerProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "containers/{containerId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const containerId = event.params.containerId;
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        db.collection(COLLECTIONS.manifests)
+            .where("containers", "array-contains", containerId)
+            .get()
+            .then((res) => {
+                if (!res.docs.length) {
+                    console.log("No matching documents.");
+                    return;
+                }
+                res.docs.forEach((el) => {
+                    el.ref.update({ url: "" });
+                });
+            });
+    }
+);
+
+export const getManifest = onRequest(
+    {
+        memory: "4GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        const { manifestId, environment } = request.query;
+        console.log({ manifestId, environment });
+        console.log("getManifest called");
+        const db = environment === "production" ? dbProd : dbDev;
+        getManifestHandler(db, manifestId, storage, response, environment);
+    }
+);
+
+export const deliveryCreatedTest = onRequest(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        const deliveryId = request.query.deliveryId;
+        const environment = request.query.environment;
+        const db = environment === "production" ? dbProd : dbDev;
+        const deliveryRes = await db
+            .collection(COLLECTIONS.deliveredContainers)
+            .doc(deliveryId)
+            .get();
+        if (!deliveryRes.exists) {
+            console.log("Delivery not found.");
+            return null;
+        }
+        const deliveryData = deliveryRes.data();
+        createDeliveryIdHandler(db, deliveryData);
+        response.json({
+            message: `Request received ${deliveryId} ${environment}`,
+        });
+        return;
+    }
+);
+
+export const getDelivery = onRequest(
+    {
+        memory: "4GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        const { deliveryId, environment } = request.query;
+        console.log({ deliveryId, environment });
+        console.log("getDelivery called");
+        const db = environment === "production" ? dbProd : dbDev;
+        getDeliveryHandler(db, deliveryId, storage, response, environment);
+    }
+);
+
+export const satelliteTest = onRequest(async (request, response) => {
+    response.json({ message: "Hello from Firebase!" });
+    const satelliteId = "NcwzS6UQzAyuwZxAadds";
+    const db = dbDev;
+    const satelliteRes = await db
+        .collection("satelliteLocation")
+        .doc(satelliteId)
+        .get();
+    if (!satelliteRes.exists) {
+        console.log("Satellite not found.");
+        return null;
+    }
+    const satelliteData = { ...satelliteRes.data(), id: satelliteRes.id };
+
+    if (!satelliteData.satelliteServiceCoordinates) {
+        console.log("No coordinates found");
+        return;
+    }
+    const oldCoordinates = satelliteData.satelliteServiceCoordinates;
+    const newCoordinates = {
+        lat: oldCoordinates.lat + 0.0000001,
+        lng: oldCoordinates.lng + 0.0000001,
+    };
+    const type = "SATELLITE";
+    updateRouteCoordinates(
+        db,
+        satelliteId,
+        newCoordinates,
+        oldCoordinates,
+        type
+    );
+});
+
+export const transporterUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "transporters/{transporterId}",
+    },
+    async (event) => {
+        const transporterId = event.params.transporterId;
+        const databaseId = event.database;
+        console.log({ transporterId, databaseId });
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const newData = event?.data?.after?.data() || null;
+        const oldData = event?.data?.before?.data() || null;
+        if (!oldData || !newData) return;
+        if (
+            !newData?.transporterServiceCoordinates ||
+            !newData?.transporterServiceCoordinates?.lat ||
+            !newData?.transporterServiceCoordinates?.lng ||
+            !oldData?.transporterServiceCoordinates ||
+            !oldData?.transporterServiceCoordinates?.lat ||
+            !oldData?.transporterServiceCoordinates?.lng
+        )
+            return;
+        const newCoordinates = newData?.transporterServiceCoordinates;
+        const oldCoordinates = oldData?.transporterServiceCoordinates;
+        if (
+            newCoordinates.lat === oldCoordinates.lat &&
+            newCoordinates.lng === oldCoordinates.lng
+        ) {
+            console.log("Coordinates are same");
+
+            return;
+        }
+        const type = "SATELLITE";
+        updateRouteCoordinates(
+            db,
+            transporterId,
+            newCoordinates,
+            oldCoordinates,
+            type
+        );
+        return;
+    }
+);
+export const transporterUpdateHandlerProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "transporters/{transporterId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const transporterId = event.params.transporterId;
+        const databaseId = event.database;
+        console.log({ transporterId, databaseId });
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const newData = event?.data?.after?.data() || null;
+        const oldData = event?.data?.before?.data() || null;
+        if (!oldData || !newData) return;
+        if (
+            !newData?.transporterServiceCoordinates ||
+            !newData?.transporterServiceCoordinates?.lat ||
+            !newData?.transporterServiceCoordinates?.lng ||
+            !oldData?.transporterServiceCoordinates ||
+            !oldData?.transporterServiceCoordinates?.lat ||
+            !oldData?.transporterServiceCoordinates?.lng
+        )
+            return;
+        const newCoordinates = newData?.transporterServiceCoordinates;
+        const oldCoordinates = oldData?.transporterServiceCoordinates;
+        if (
+            newCoordinates.lat === oldCoordinates.lat &&
+            newCoordinates.lng === oldCoordinates.lng
+        ) {
+            console.log("Coordinates are same");
+
+            return;
+        }
+        const type = "SATELLITE";
+        updateRouteCoordinates(
+            db,
+            transporterId,
+            newCoordinates,
+            oldCoordinates,
+            type
+        );
+        return;
+    }
+);
+export const satelliteUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "satelliteLocation/{satelliteId}",
+    },
+    async (event) => {
+        const satelliteId = event.params.satelliteId;
+        const databaseId = event.database;
+        console.log({ satelliteId, databaseId });
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const newData = event?.data?.after?.data() || null;
+        const oldData = event?.data?.before?.data() || null;
+        if (!oldData || !newData) return;
+        if (
+            !newData?.satelliteServiceCoordinates ||
+            !newData?.satelliteServiceCoordinates?.lat ||
+            !newData?.satelliteServiceCoordinates?.lng ||
+            !oldData?.satelliteServiceCoordinates ||
+            !oldData?.satelliteServiceCoordinates?.lat ||
+            !oldData?.satelliteServiceCoordinates?.lng
+        )
+            return;
+        const newCoordinates = newData?.satelliteServiceCoordinates;
+        const oldCoordinates = oldData?.satelliteServiceCoordinates;
+        if (
+            newCoordinates.lat === oldCoordinates.lat &&
+            newCoordinates.lng === oldCoordinates.lng
+        ) {
+            console.log("Coordinates are same");
+
+            return;
+        }
+        const type = "SATELLITE";
+        updateRouteCoordinates(
+            db,
+            satelliteId,
+            newCoordinates,
+            oldCoordinates,
+            type
+        );
+        return;
+    }
+);
+export const satelliteUpdateHandlerProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "satelliteLocation/{satelliteId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const satelliteId = event.params.satelliteId;
+        const databaseId = event.database;
+        console.log({ satelliteId, databaseId });
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const newData = event?.data?.after?.data() || null;
+        const oldData = event?.data?.before?.data() || null;
+        if (!oldData || !newData) return;
+        if (
+            !newData?.satelliteServiceCoordinates ||
+            !newData?.satelliteServiceCoordinates?.lat ||
+            !newData?.satelliteServiceCoordinates?.lng ||
+            !oldData?.satelliteServiceCoordinates ||
+            !oldData?.satelliteServiceCoordinates?.lat ||
+            !oldData?.satelliteServiceCoordinates?.lng
+        )
+            return;
+        const newCoordinates = newData?.satelliteServiceCoordinates;
+        const oldCoordinates = oldData?.satelliteServiceCoordinates;
+        if (
+            newCoordinates.lat === oldCoordinates.lat &&
+            newCoordinates.lng === oldCoordinates.lng
+        ) {
+            console.log("Coordinates are same");
+
+            return;
+        }
+        const type = "SATELLITE";
+
+        updateRouteCoordinates(
+            db,
+            satelliteId,
+            newCoordinates,
+            oldCoordinates,
+            type
+        );
+        return;
+    }
+);
+export const scheduleCreateHandler = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "serviceSchedules/{scheduleId}",
+    },
+    async (event) => {
+        const scheduleId = event.params.scheduleId;
+        const databaseId = event.database;
+        console.log({ scheduleId, databaseId });
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const data = event.data.data() || null;
+        if (!data) return null;
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        addScheduleToBaseRoute(db, scheduleId, data.routeId, data.generatorId);
+        handleNewSchedule(db, data, scheduleId, todayDate);
+    }
+);
+export const scheduleCreateHandlerProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "serviceSchedules/{scheduleId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const scheduleId = event.params.scheduleId;
+        const databaseId = event.database;
+        console.log({ scheduleId, databaseId });
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const data = event.data.data() || null;
+        if (!data) return null;
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        addScheduleToBaseRoute(db, scheduleId, data.routeId, data.generatorId);
+        handleNewSchedule(db, data, scheduleId, todayDate);
+    }
+);
+/**
+ * Updates all future scheduled services for a given schedule when schedule details have changed
+ * (but frequency hasn't changed).
+ *
+ * @param {FirestoreEvent<Change<QueryDocumentSnapshot> | undefined} event - Firestore database instance
+ *
+ * @returns {Promise<null>} - Resolves when all updates are complete
+ */
+const onScheduleUpdate = async (event) => {
+    const scheduleId = event.params.scheduleId;
+    const databaseId = event.database;
+    const db = databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+    const newData = event?.data?.after?.data() || null;
+    const oldData = event?.data?.before?.data() || null;
+    console.log({ scheduleId, newData, oldData });
+
+    if (!newData && oldData) {
+        removeScheduleFromBaseRoute(db, scheduleId, oldData.routeId);
+        return null;
+    }
+
+    // Process route changes
+    if (newData && oldData && oldData?.routeId !== newData?.routeId) {
+        removeScheduleFromBaseRoute(db, scheduleId, oldData.routeId);
+        addScheduleToBaseRoute(
+            db,
+            scheduleId,
+            newData.routeId,
+            newData.generatorId
+        );
+    }
+
+    try {
+        let timeZone = "America/Los_Angeles";
+        if (newData?.transporterId) {
+            const transporterRes = await db
+                .collection(COLLECTIONS.transporters)
+                .doc(newData.transporterId)
+                .get();
+            if (transporterRes.exists) {
+                const transporterServiceCoordinates =
+                    transporterRes?.data()?.transporterServiceCoordinates;
+                if (
+                    transporterServiceCoordinates?.lat &&
+                    transporterServiceCoordinates?.lng
+                ) {
+                    const lat = transporterServiceCoordinates.lat;
+                    const lng = transporterServiceCoordinates.lng;
+                    timeZone = find(lat, lng)[0];
+                    console.log("Timezone found:", timeZone);
+                }
+            }
+        }
+        const localDate = moment().tz(timeZone);
+        console.log(
+            `Local date in ${timeZone}:`,
+            localDate.format("YYYY-MM-DD HH:mm:ss"),
+            localDate.toDate().toISOString()
+        );
+        const year = localDate.year();
+        const month = localDate.month(); // 0-indexed
+        const day = localDate.date();
+        // Convert to UTC with time set to 00:00:00
+        const todayUTC = moment.utc([year, month, day]).toDate();
+        console.log("UTC Date object:", todayUTC.toISOString());
+        const frequencyChanged =
+            oldData.serviceFrequency?.type !== newData.serviceFrequency?.type ||
+            oldData.anchorDate !== newData.anchorDate ||
+            JSON.stringify(oldData.serviceFrequency) !==
+                JSON.stringify(newData.serviceFrequency);
+
+        if (frequencyChanged) {
+            await handleFrequencyChange(db, newData, scheduleId, todayUTC);
+            return null;
+        }
+        if (newData && oldData && oldData?.routeId !== newData?.routeId) {
+            await updateAllServicesRouteId(db, newData, scheduleId, todayUTC);
+        }
+
+        return null;
+    } catch (error) {
+        console.error("Error in handleServiceScheduling:", error);
+        return null;
+    }
+};
+
+export const scheduleUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "serviceSchedules/{scheduleId}",
+    },
+    onScheduleUpdate
+);
+
+export const scheduleUpdateHandlerProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "serviceSchedules/{scheduleId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    onScheduleUpdate
+);
+
+export const serviceCreateHandler = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "scheduledServices/{serviceId}",
+    },
+    async (event) => {
+        console.log("service create handler called");
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const serviceId = event.params.serviceId;
+        const res = event.data;
+        if (res && res.exists) {
+            const data = res.data();
+            console.log({ serviceData: data });
+
+            const generatorRes = await db
+                .collection(COLLECTIONS.generators)
+                .doc(data.generatorId)
+                .get();
+            if (!generatorRes.exists) {
+                return null;
+            }
+            const generatorData = generatorRes.data();
+            generatorData.id = generatorRes.id;
+            const routeId = data.routeId;
+            const dateString = data.date.toDate().toISOString();
+            console.log({ dateString });
+            const newWaypoint = {
+                type: LOCATION_TYPE.GENERATOR,
+                id: generatorData.id,
+                lat: generatorData.serviceAddCoordinates.lat,
+                lng: generatorData.serviceAddCoordinates.lng,
+                isPriority: data.isPriority ?? false,
+                serviceId: serviceId,
+                isLocked: false,
+            };
+            const dailyRouteRes = await db
+                .collection(COLLECTIONS.routes)
+                .doc(routeId)
+                .collection(COLLECTIONS.dailyRoutes)
+                .doc(dateString)
+                .get();
+            if (!dailyRouteRes.exists) {
+                console.log("Daily Route not found.");
+                const routeRes = await db
+                    .collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .get();
+                if (!routeRes.exists) {
+                    return null;
+                }
+                const baseRouteData = routeRes.data();
+                let totalDistanceInMeters = 0;
+                let totalTimeInSeconds = 0;
+
+                const dailyRouteData = {
+                    defaultStartLocation: baseRouteData.defaultStartLocation,
+                    defaultEndLocation: baseRouteData.defaultEndLocation,
+                    totalDistanceInMeters,
+                    totalTimeInSeconds,
+                    createdAt: FieldValue.serverTimestamp(),
+                    updatedAt: FieldValue.serverTimestamp(),
+                    waypoints: [newWaypoint],
+                };
+                db.collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .collection(COLLECTIONS.dailyRoutes)
+                    .doc(dateString)
+                    .set(dailyRouteData);
+
+                return null;
+            } else {
+                console.log("Daily Route found.");
+                const dailyRouteData = dailyRouteRes.data();
+                dailyRouteData.id = dailyRouteRes.id;
+                const existingWaypoints = dailyRouteData.waypoints ?? [];
+                existingWaypoints.push(newWaypoint);
+                db.collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .collection(COLLECTIONS.dailyRoutes)
+                    .doc(dateString)
+                    .set(
+                        {
+                            waypoints: existingWaypoints,
+                            updatedAt: FieldValue.serverTimestamp(),
+                        },
+                        { merge: true }
+                    );
+                return null;
+            }
+        }
+        return null;
+    }
+);
+
+export const serviceCreateHandlerProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "scheduledServices/{serviceId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        console.log("service create handler called");
+        const databaseId = event.database;
+        const db =
+            databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const serviceId = event.params.serviceId;
+        const res = event.data;
+        if (res && res.exists) {
+            const data = res.data();
+            console.log({ serviceData: data });
+
+            const generatorRes = await db
+                .collection(COLLECTIONS.generators)
+                .doc(data.generatorId)
+                .get();
+            if (!generatorRes.exists) {
+                return null;
+            }
+            const generatorData = generatorRes.data();
+            generatorData.id = generatorRes.id;
+            const routeId = data.routeId;
+            const dateString = data.date.toDate().toISOString();
+            console.log({ dateString });
+            const newWaypoint = {
+                type: LOCATION_TYPE.GENERATOR,
+                id: generatorData.id,
+                lat: generatorData.serviceAddCoordinates.lat,
+                lng: generatorData.serviceAddCoordinates.lng,
+                isPriority: data.isPriority ?? false,
+                serviceId: serviceId,
+                isLocked: false,
+            };
+            const dailyRouteRes = await db
+                .collection(COLLECTIONS.routes)
+                .doc(routeId)
+                .collection(COLLECTIONS.dailyRoutes)
+                .doc(dateString)
+                .get();
+            if (!dailyRouteRes.exists) {
+                console.log("Daily Route not found.");
+                const routeRes = await db
+                    .collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .get();
+                if (!routeRes.exists) {
+                    return null;
+                }
+                const baseRouteData = routeRes.data();
+                let totalDistanceInMeters = 0;
+                let totalTimeInSeconds = 0;
+
+                const dailyRouteData = {
+                    defaultStartLocation: baseRouteData.defaultStartLocation,
+                    defaultEndLocation: baseRouteData.defaultEndLocation,
+                    totalDistanceInMeters,
+                    totalTimeInSeconds,
+                    createdAt: FieldValue.serverTimestamp(),
+                    updatedAt: FieldValue.serverTimestamp(),
+                    waypoints: [newWaypoint],
+                };
+                db.collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .collection(COLLECTIONS.dailyRoutes)
+                    .doc(dateString)
+                    .set(dailyRouteData);
+
+                return null;
+            } else {
+                console.log("Daily Route found.");
+                const dailyRouteData = dailyRouteRes.data();
+                dailyRouteData.id = dailyRouteRes.id;
+                const existingWaypoints = dailyRouteData.waypoints ?? [];
+                existingWaypoints.push(newWaypoint);
+                db.collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .collection(COLLECTIONS.dailyRoutes)
+                    .doc(dateString)
+                    .set(
+                        {
+                            waypoints: existingWaypoints,
+                            updatedAt: FieldValue.serverTimestamp(),
+                        },
+                        { merge: true }
+                    );
+                return null;
+            }
+        }
+        return null;
+    }
+);
+
+export const onServiceUpdate = async (event) => {
+    const databaseId = event.database;
+    const db = databaseId === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+    console.log("service update handler called");
+
+    const serviceId = event.params.serviceId;
+    const newData = event.data?.after?.data() || null;
+    const oldData = event.data?.before?.data() || null;
+    if (!newData) {
+        removeServiceFromDailyRoute(
+            db,
+            serviceId,
+            oldData.routeId,
+            oldData.date
+        );
+    }
+    if (newData && oldData && oldData?.routeId !== newData?.routeId) {
+        removeServiceFromDailyRoute(
+            db,
+            serviceId,
+            oldData.routeId,
+            oldData.date
+        );
+        addServiceToDailyRoute(
+            db,
+            serviceId,
+            newData.routeId,
+            newData.date,
+            newData
+        );
+        return;
+    }
+    if (newData?.status && newData.status === scheduledServiceStatus.COMPLETE) {
+        if (newData.transferStatus === transferStatusType.COMPLETE) {
+            console.log(
+                "Waste is already transferred to other vehicle or ts/tf"
+            );
+
+            return;
+        }
+        updateServiceVehicleOnServiceComplete(db, serviceId);
+        // To do update the manifest.
+    } else if (
+        newData?.status &&
+        newData.status === scheduledServiceStatus.CANCELLED &&
+        oldData?.status === scheduledServiceStatus.PENDING
+    ) {
+        console.log("Service is cancelled");
+        removeServiceFromDailyRoute(
+            db,
+            serviceId,
+            oldData.routeId,
+            oldData.date
+        );
+    } else if (
+        newData?.status &&
+        newData.status === scheduledServiceStatus.PENDING &&
+        oldData?.status === scheduledServiceStatus.CANCELLED
+    ) {
+        console.log("Service is reinstated");
+        addServiceToDailyRoute(
+            db,
+            serviceId,
+            oldData.routeId,
+            oldData.date,
+            newData
+        );
+    } else if (
+        newData?.status &&
+        newData.status === scheduledServiceStatus.DELETED
+    ) {
+        console.log("Service is Deleted");
+        removeServiceFromDailyRoute(
+            db,
+            serviceId,
+            oldData.routeId,
+            oldData.date
+        );
+    }
+    return null;
+};
+
+export const serviceUpdateHandler = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "scheduledServices/{serviceId}",
+    },
+    onServiceUpdate
+);
+
+export const serviceUpdateHandlerProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "scheduledServices/{serviceId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    onServiceUpdate
+);
+
+export const tempTest = onRequest(async (request, response) => {
+    console.log("tempTest called");
+
+    const serviceId = "q18R6IZrv8ucWLJh23Vm";
+    const db = dbProd;
+    const serviceRes = await db
+        .collection(COLLECTIONS.scheduledServices)
+        .doc(serviceId)
+        .get();
+    if (!serviceRes.exists) {
+        console.log("Service not found.");
+        response.json({ message: "Hello from Firebase!" });
+        return null;
+    }
+    const oldData = serviceRes.data();
+    await removeServiceFromDailyRoute(
+        db,
+        serviceId,
+        oldData.routeId,
+        oldData.date
+    );
+    response.json({ message: "Hello from Firebase!" });
+});
+
+export const dailyRoutePathUpdateHandler = onRequest(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (request, response) => {
+        console.log("dailyRouteUpdateHandler called");
+        const db = dbDev;
+        const { dailyRouteId, routeId } = request.query;
+        const batch = db.batch();
+        const dailyRouteRes = await db
+            .collection(COLLECTIONS.routes)
+            .doc(routeId)
+            .collection(COLLECTIONS.dailyRoutes)
+            .doc(dailyRouteId)
+            .get();
+        if (dailyRouteRes.exists) {
+            const waypoints = dailyRouteRes.data()?.waypoints || [];
+            const defaultStartLocation =
+                dailyRouteRes.data()?.defaultStartLocation;
+            const defaultEndLocation = dailyRouteRes.data()?.defaultEndLocation;
+            if (!defaultStartLocation || !defaultEndLocation) return;
+            console.log({
+                waypoints,
+                defaultEndLocation,
+                defaultStartLocation,
+            });
+
+            const directionRes = await client.directions({
+                params: {
+                    origin: {
+                        lat: defaultStartLocation.lat,
+                        lng: defaultStartLocation.lng,
+                    },
+                    destination: {
+                        lat: defaultEndLocation.lat,
+                        lng: defaultEndLocation.lng,
+                    },
+                    waypoints: waypoints.map((el) => ({
+                        lat: el.lat,
+                        lng: el.lng,
+                    })),
+                    key: GOOGLE_MAPS_SERVER_KEY,
+                    mode: TravelMode.driving,
+                    optimize: false,
+                },
+            });
+            console.log({ directionRes });
+            const tempPaths = [];
+            const route = directionRes.data.routes[0];
+            let totalDistanceInMeters = 0;
+            let totalTimeInSeconds = 0;
+            route.legs.forEach((leg) => {
+                totalDistanceInMeters += leg.distance.value;
+                totalTimeInSeconds += leg.duration.value;
+                leg.steps.forEach((step) => {
+                    const decoded = decode(step.polyline.points);
+                    decoded.forEach((tup) => {
+                        tempPaths.push({ lat: tup[0], lng: tup[1] });
+                    });
+                });
+            });
+            console.log({ tempPaths });
+            batch.update(
+                db
+                    .collection(COLLECTIONS.routes)
+                    .doc(routeId)
+                    .collection(COLLECTIONS.dailyRoutes)
+                    .doc(dailyRouteId),
+                {
+                    totalDistanceInMeters,
+                    totalTimeInSeconds,
+                    updatedAt: FieldValue.serverTimestamp(),
+                }
+            );
+
+            const allPathsRes = await db
+                .collection(COLLECTIONS.routes)
+                .doc(routeId)
+                .collection(COLLECTIONS.dailyRoutes)
+                .doc(dailyRouteId)
+                .collection("paths")
+                .get();
+            allPathsRes.docs.forEach(async (el) => {
+                batch.delete(el.ref);
+            });
+            const pathChunks = splitArrayIntoChunks(tempPaths, 10000);
+            pathChunks.forEach((chunk, i) => {
+                let data = {
+                    index: i,
+                    path: chunk,
+                };
+                batch.create(
+                    db
+                        .collection(COLLECTIONS.routes)
+                        .doc(routeId)
+                        .collection(COLLECTIONS.dailyRoutes)
+                        .doc(dailyRouteId)
+                        .collection("paths")
+                        .doc(),
+                    data
+                );
+            });
+            try {
+                await batch.commit();
+            } catch (error) {
+                console.log(error);
+            }
+
+            const temp = await db
+                .collection(COLLECTIONS.routes)
+                .doc(routeId)
+                .collection(COLLECTIONS.dailyRoutes)
+                .doc(dailyRouteId)
+                .collection("paths")
+                .get();
+            const res = [];
+            temp.docs.forEach((el) => {
+                res.push({ id: el.id, ...el.data() });
+            });
+            console.log("Data updated Successfully.");
+            response.json(JSON.stringify(res));
+            return;
+        }
+        response.json({ ...request.query });
+        return null;
+    }
+);
+
+export const routeOptimizationHandler = onRequest(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    optimizeRoute
+);
+
+const updateServiceVehicleOnServiceComplete = async (db, serviceId) => {
+    console.log({ "updating service vehicle": "" });
+
+    const scheduledServicesRes = await db
+        .collection(COLLECTIONS.scheduledServices)
+        .doc(serviceId)
+        .get();
+    if (!scheduledServicesRes.exists) {
+        console.log("schedule data not found");
+    }
+    const scheduledServicesData = scheduledServicesRes.data();
+    console.log({ scheduledServicesData });
+    if (
+        scheduledServicesData.status === scheduledServiceStatus.COMPLETE &&
+        scheduledServicesData.assignedServiceVehicleId
+    ) {
+        const serviceVehicleRes = await db
+            .collection(COLLECTIONS.serviceVehicles)
+            .doc(scheduledServicesData.assignedServiceVehicleId)
+            .get();
+        if (!serviceVehicleRes.exists) {
+            console.log("Service Vehicle data not found");
+        }
+        const serviceVehicleData = serviceVehicleRes.data();
+        const currentScheduledServices = [];
+        if (
+            serviceVehicleData?.currentScheduledServices &&
+            serviceVehicleData?.currentScheduledServices.length > 0
+        ) {
+            currentScheduledServices.push(
+                ...serviceVehicleData.currentScheduledServices
+            );
+        }
+
+        if (!currentScheduledServices.includes(serviceId)) {
+            currentScheduledServices.push(serviceId);
+        }
+        let currentTotalWeight = 0;
+        for (const scheduleService of currentScheduledServices) {
+            const res = await db
+                .collection(COLLECTIONS.scheduledServices)
+                .doc(scheduleService)
+                .get();
+            if (res.exists) {
+                const data = res.data();
+                let totalWeightOfService = 0;
+                const { itemized, consolidated } = data;
+                if (itemized && itemized?.length > 0) {
+                    for (const el of itemized) {
+                        if (!isNaN(parseFloat(`${el?.weight}`))) {
+                            totalWeightOfService += parseFloat(`${el?.weight}`);
+                        }
+                    }
+                }
+                if (consolidated && consolidated?.length > 0) {
+                    for (const el of consolidated) {
+                        if (!isNaN(parseFloat(`${el?.weight}`))) {
+                            totalWeightOfService += parseFloat(`${el?.weight}`);
+                        }
+                    }
+                }
+                currentTotalWeight += totalWeightOfService;
+            }
+        }
+        console.log({ currentTotalWeight });
+        db.collection(COLLECTIONS.serviceVehicles)
+            .doc(scheduledServicesData.assignedServiceVehicleId)
+            .update({
+                weightOnVehicle: currentTotalWeight,
+                currentScheduledServices,
+            });
+        console.log(
+            "Service is complete, Service Vehicle Successfully updated"
+        );
+    }
+};
+
+// Format serviceOctoId with SID- prefix and hyphenated uppercase ID
+function formatServiceOctoId(serviceId) {
+    const uppercaseId = serviceId.toUpperCase();
+    let formattedId = "";
+
+    // Insert hyphen after every 5th character
+    for (let i = 0; i < uppercaseId.length; i++) {
+        if (i > 0 && i % 5 === 0) {
+            formattedId += "-";
+        }
+        formattedId += uppercaseId[i];
+    }
+
+    return `SID-${formattedId}`;
+}
+
+async function handleNewSchedule(db, scheduleData, scheduleId, todayDate) {
+    console.log({ scheduleData, scheduleId, todayDate });
+    let batch = db.batch();
+    let operationCount = 0;
+    let scheduledDates = new Set();
+    const todayMoment = moment(todayDate).startOf("day");
+    if (scheduleData.serviceFrequency?.type === "WC") {
+        const anchorMoment = moment(scheduleData.anchorDate).startOf("day");
+        scheduledDates = new Set([formattedDate(anchorMoment.toDate())]);
+    } else {
+        scheduledDates = getScheduledDates(scheduleData);
+    }
+    console.log({ scheduledDates });
+    for (const dateString of scheduledDates) {
+        const dateMoment = moment(dateString, "ddd, MM/DD/YYYY");
+        const dateStamp = Timestamp.fromDate(dateMoment.toDate());
+        const newServiceRef = db.collection("scheduledServices").doc();
+        const serviceOctoId = formatServiceOctoId(newServiceRef.id);
+        batch.set(newServiceRef, {
+            serviceOctoId: serviceOctoId,
+            serviceScheduleId: scheduleId,
+            generatorId: scheduleData.generatorId,
+            routeId: scheduleData.routeId,
+            date: dateStamp,
+            isPriority: false,
+            status: "PENDING",
+            createdAt: FieldValue.serverTimestamp(),
+            transporterId: scheduleData?.transporterId ?? "",
+        });
+        operationCount++;
+        if (operationCount >= 450) {
+            await batch.commit();
+            batch = db.batch();
+            operationCount = 0;
+        }
+    }
+    if (operationCount > 0) {
+        await batch.commit();
+    }
+    return null;
+}
+
+async function deleteAllScheduledServices(db, scheduleId) {
+    const servicesQuery = await db
+        .collection("scheduledServices")
+        .where("serviceScheduleId", "==", scheduleId)
+        .get();
+
+    let batch = db.batch();
+    let operationCount = 0;
+
+    for (const doc of servicesQuery) {
+        batch.delete(doc.ref);
+        operationCount++;
+
+        if (operationCount >= 450) {
+            await batch.commit();
+            batch = db.batch();
+            operationCount = 0;
+        }
+    }
+
+    if (operationCount > 0) {
+        await batch.commit();
+        return;
+    }
+    return null;
+}
+
+const removeScheduleFromBaseRoute = async (db, scheduleId, routeId) => {
+    console.log({ scheduleId, routeId });
+    if (!scheduleId || !routeId) return;
+    const routeRes = await db.collection(COLLECTIONS.routes).doc(routeId).get();
+    if (routeRes.exists) {
+        const { waypoints } = routeRes.data();
+        if (!waypoints || !waypoints?.length) return;
+        const filteredWaypoints = waypoints.filter(
+            (el) => el.scheduleId !== scheduleId
+        );
+        console.log({ "removing generator from route": scheduleId, routeId });
+        await db.collection(COLLECTIONS.routes).doc(routeId).update({
+            waypoints: filteredWaypoints,
+            updatedAt: FieldValue.serverTimestamp(),
+        });
+    }
+};
+const addScheduleToBaseRoute = async (db, scheduleId, routeId, generatorId) => {
+    if (!scheduleId || !routeId || !generatorId) return;
+    const generatorRes = await db
+        .collection(COLLECTIONS.generators)
+        .doc(generatorId)
+        .get();
+    let newWaypoint = {
+        scheduleId,
+        generatorId,
+        name: "--",
+        location: {
+            lat: 0,
+            lng: 0,
+        },
+        type: "GENERATOR",
+        octoNumber: "--",
+    };
+    if (generatorRes.exists) {
+        const generatorData = generatorRes.data();
+        newWaypoint.location = generatorData.serviceAddCoordinates;
+        newWaypoint.name = generatorData.generatorName;
+        newWaypoint.octoNumber = generatorData.octoNumber;
+    }
+    db.collection(COLLECTIONS.routes)
+        .doc(routeId)
+        .update({
+            waypoints: FieldValue.arrayUnion(newWaypoint),
+            updatedAt: FieldValue.serverTimestamp(),
+        });
+};
+
+export const mergePdfs = onRequest(
+    {
+        memory: "4GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (req, res) => {
+        try {
+            const manifestIdsRaw = req.query.manifestIds;
+            const environment = req.query.environment || "development";
+            const transferId = req.query.transferId;
+
+            if (!manifestIdsRaw || !transferId) {
+                return res.status(400).json({
+                    error: "Missing required query parameters: transferId or manifestIds",
+                });
+            }
+
+            const manifestIds = manifestIdsRaw
+                .split(",")
+                .map((id) => id.trim());
+
+            const db = environment === "production" ? dbProd : dbDev;
+
+            const transferRef = db
+                .collection(COLLECTIONS.transfers)
+                .doc(transferId);
+            const transferSnap = await transferRef.get();
+            const transferData = transferSnap.exists
+                ? transferSnap.data()
+                : null;
+
+            if (transferData?.allAssociatedPdfUrl) {
+                //   return res.status(200).json({ url: transferData.allAssociatedPdfUrl });
+                res.redirect(307, transferData?.allAssociatedPdfUrl);
+            }
+
+            const manifests = await Promise.all(
+                manifestIds.map(async (id) => {
+                    const docRef = db.collection(COLLECTIONS.manifests).doc(id);
+                    const docSnap = await docRef.get();
+                    let doc = docSnap.exists ? { id, ...docSnap.data() } : null;
+                    if (doc && doc.url) {
+                        return doc;
+                    } else if (doc && !doc.url) {
+                        let url = await getManifestHandler(
+                            db,
+                            id,
+                            storage,
+                            res,
+                            environment,
+                            true
+                        );
+                        return url ? { ...doc, url } : doc;
+                    } else {
+                        return null;
+                    }
+                })
+            );
+
+            const validManifests = manifests.filter((doc) => doc && doc.url);
+            if (validManifests.length === 0) {
+                return res
+                    .status(404)
+                    .json({ error: "No valid manifests found with PDF URLs" });
+            }
+
+            let transporterId = validManifests?.[0]?.transporterId;
+            let generatorId = validManifests?.[0]?.generatorId;
+
+            const pdfUrls = validManifests.map((manifest) => manifest.url);
+            const pdfBuffers = await Promise.all(
+                pdfUrls.map(async (url) => {
+                    const response = await fetch(url);
+                    if (!response.ok) return null;
+                    return await response.arrayBuffer();
+                })
+            );
+
+            const mergedPdf = await PDFDocument.create();
+            for (const pdfBuffer of pdfBuffers) {
+                if (!pdfBuffer) continue;
+                const pdfToMerge = await PDFDocument.load(pdfBuffer);
+                const copiedPages = await mergedPdf.copyPages(
+                    pdfToMerge,
+                    pdfToMerge.getPageIndices()
+                );
+                copiedPages.forEach((page) => mergedPdf.addPage(page));
+            }
+
+            const mergedPdfBytes = await mergedPdf.save();
+            const token = uuidv4();
+            const metadata = {
+                metadata: {
+                    firebaseStorageDownloadTokens: token,
+                },
+                contentType: "application/pdf",
+                cacheControl: "public, max-age=31536000",
+            };
+
+            const date = new Date();
+            const mergedManifestId = `merged_${date.toISOString()}`;
+            const filename = `${
+                environment === "production" ? "prod" : "dev"
+            }/manifests/${transporterId}/${generatorId}/${mergedManifestId}.pdf`;
+
+            const bucket = storage.bucket();
+            await bucket.file(filename).save(mergedPdfBytes, { metadata });
+
+            const finalUrl = `${storageUrl}/${encodeURIComponent(
+                filename
+            )}?alt=media&token=${token}`;
+            console.log("Download URL:", finalUrl);
+
+            // Save merged URL in transfer doc
+            await transferRef.update({ allAssociatedPdfUrl: finalUrl });
+
+            res.redirect(307, finalUrl);
+            // return res.status(200).json({ url: finalUrl });
+        } catch (error) {
+            console.error("Error merging PDFs:", error);
+            return res.status(500).json({ error: "Internal server error" });
+        }
+    }
+);
+
+export const getConsolidatedManifest = onRequest(
+    {
+        memory: "4GiB",
+        timeoutSeconds: 540,
+        cors: true,
+        concurrency: 20,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+    },
+    async (req, res) => {
+        try {
+            const { transporterId, transferId, environment } = req.query;
+            if (!transferId.trim() || !transporterId?.trim()) {
+                return res.status(400).json({
+                    error: "Missing required query parameters: transferId or transporterId",
+                });
+            }
+            const db = environment === "production" ? dbProd : dbDev;
+            let resp = await transferManifestHandler(
+                db,
+                transporterId,
+                transferId,
+                COLLECTIONS,
+                res,
+                environment,
+                storage
+            );
+            console.log(resp, JSON.stringify(resp));
+        } catch (error) {
+            console.error("Error merging PDFs:", error);
+            return res.status(500).json({ error: "Internal server error" });
+        }
+    }
+);
+
+export const onGeneratorCreated = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "generators/{generatorId}",
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const data = event.data?.data();
+        const transporterId = data?.transporterId;
+        const industryType = data?.industryType || "unknown";
+
+        if (!transporterId) {
+            console.warn(
+                "Generator document missing transporterId",
+                event.params.generatorId
+            );
+            return;
+        }
+        try {
+            await updateTransporterIndustryCount(
+                db,
+                transporterId,
+                industryType,
+                1
+            );
+            console.log(`Successfully incremented count for ${transporterId}`);
+        } catch (error) {
+            console.error(
+                `Failed to process generator ${event.params.generatorId}:`,
+                error
+            );
+            throw error;
+        }
+    }
+);
+
+export const onGeneratorDeleted = onDocumentDeleted(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "generators/{generatorId}",
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+
+        const data = event.data?.data();
+        const transporterId = data?.transporterId;
+        const industryType = data?.industryType || "unknown";
+        if (!transporterId) return;
+
+        await updateTransporterIndustryCount(
+            db,
+            transporterId,
+            industryType,
+            -1
+        );
+    }
+);
+
+export const onGeneratorUpdated = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "generators/{generatorId}",
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+
+        const before = event.data?.before.data();
+        const after = event.data?.after.data();
+
+        const oldTransporter = before?.transporterId;
+        const newTransporter = after?.transporterId;
+
+        const oldType = before?.industryType || "unknown";
+        const newType = after?.industryType || "unknown";
+
+        if (oldTransporter !== newTransporter) {
+            if (oldTransporter)
+                await updateTransporterIndustryCount(
+                    db,
+                    oldTransporter,
+                    oldType,
+                    -1
+                );
+            if (newTransporter)
+                await updateTransporterIndustryCount(
+                    db,
+                    newTransporter,
+                    newType,
+                    1
+                );
+        } else if (oldType !== newType && newTransporter) {
+            await updateTransporterIndustryCount(
+                db,
+                newTransporter,
+                oldType,
+                -1
+            );
+            await updateTransporterIndustryCount(
+                db,
+                newTransporter,
+                newType,
+                1
+            );
+        }
+
+        console.log("Before:", { oldTransporter, oldType });
+        console.log("After:", { newTransporter, newType });
+    }
+);
+
+// CREATE trigger
+export const onGeneratorCreatedProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "generators/{generatorId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        console.log("Event clicked...");
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const data = event.data?.data();
+        console.log(data?.toString());
+        const transporterId = data?.transporterId;
+        const industryType = data?.industryType || "unknown";
+        console.log({ transporterId, industryType });
+
+        if (!transporterId) {
+            console.warn(
+                "Missing transporterId in generator",
+                event.params.generatorId
+            );
+            return;
+        }
+
+        await updateTransporterIndustryCount(
+            db,
+            transporterId,
+            industryType,
+            1
+        );
+    }
+);
+
+// UPDATE trigger
+export const onGeneratorUpdatedProd = onDocumentUpdated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "generators/{generatorId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const before = event.data?.before.data();
+        const after = event.data?.after.data();
+
+        const oldTransporter = before?.transporterId;
+        const newTransporter = after?.transporterId;
+
+        const oldType = before?.industryType || "unknown";
+        const newType = after?.industryType || "unknown";
+
+        if (oldTransporter !== newTransporter) {
+            if (oldTransporter)
+                await updateTransporterIndustryCount(
+                    db,
+                    oldTransporter,
+                    oldType,
+                    -1
+                );
+            if (newTransporter)
+                await updateTransporterIndustryCount(
+                    db,
+                    newTransporter,
+                    newType,
+                    1
+                );
+        } else if (oldType !== newType && newTransporter) {
+            await updateTransporterIndustryCount(
+                db,
+                newTransporter,
+                oldType,
+                -1
+            );
+            await updateTransporterIndustryCount(
+                db,
+                newTransporter,
+                newType,
+                1
+            );
+        }
+
+        console.log("Before:", { oldTransporter, oldType });
+        console.log("After:", { newTransporter, newType });
+    }
+);
+
+// DELETE trigger
+export const onGeneratorDeletedProd = onDocumentDeleted(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "generators/{generatorId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        const data = event.data?.data();
+        const transporterId = data?.transporterId;
+        const industryType = data?.industryType || "unknown";
+
+        if (!transporterId) return;
+
+        await updateTransporterIndustryCount(
+            db,
+            transporterId,
+            industryType,
+            -1
+        );
+    }
+);
+
+export const generateTransferOctoId = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "transfers/{docId}",
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        transferOctoInGenerator(event, db);
+    }
+);
+export const generateTransferOctoIdProd = onDocumentCreated(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "transfers/{docId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        transferOctoInGenerator(event, db);
+    }
+);
+
+export const auditOnCreate = onDocumentCreatedWithAuthContext(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "{collection}/{docId}",
+    },
+    async (event) => {
+        if (event.params.collection === COLLECTIONS.scheduledServices) return;
+        const change = { before: { exists: false }, after: event.data };
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        return createAuditLog(change, event, "CREATE", db);
+    }
+);
+
+export const auditOnCreateProd = onDocumentCreatedWithAuthContext(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "{collection}/{docId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        if (event.params.collection === COLLECTIONS.scheduledServices) return;
+        const change = { before: { exists: false }, after: event.data };
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        return createAuditLog(change, event, "CREATE", db);
+    }
+);
+
+export const auditOnUpdate = onDocumentUpdatedWithAuthContext(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "{collection}/{docId}",
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        return createAuditLog(event.data, event, "UPDATE", db);
+    }
+);
+
+export const auditOnUpdateProd = onDocumentUpdatedWithAuthContext(
+    {
+        memory: "2GiB",
+        timeoutSeconds: 540,
+        concurrency: 80,
+        region: "us-central1",
+        minInstances: 0,
+        maxInstances: 5,
+        serviceAccount:
+            "firebase-adminsdk-y4wsq@routes-123.iam.gserviceaccount.com",
+        document: "{collection}/{docId}",
+        database: process.env.PROD_FIRESTORE_ID,
+    },
+    async (event) => {
+        const db =
+            event.database === process.env.PROD_FIRESTORE_ID ? dbProd : dbDev;
+        return createAuditLog(event.data, event, "UPDATE", db);
+    }
+);
+
+export const createUserByAdmin = onRequest(async (req, res) => {
+    const { email, password, environment } = req.body;
+    if (!email || !password || !environment) {
+        return res
+            .status(400)
+            .json({ error: "Email, password, and environment are required" });
+    }
+
+    if (environment === "production") {
+        auth.tenantId = "production-8xvgn";
+    }
+
+    const userRecord = await auth.createUser({
+        email,
+        password,
+    });
+    return res.status(200).json({ uid: userRecord.uid });
+});
