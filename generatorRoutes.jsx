@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "react-toastify";
 import { BiPlus } from "react-icons/bi";
@@ -76,6 +76,8 @@ import SearchableDropdownForParents from "../../../../../../../../components/UI/
 import GeneratorUpcomingServices from "./GeneratorUpcomingServices";
 import GeneratorPreviousServices from "./GeneratorPreviousServices";
 import SsrFormComponent from "./components/SSRFormComponent";
+import { useSSRManagement } from "../../../../../../../../utils/useSsrRequests";
+import MemoizedMapSection from "./components/MemoizedMapSection";
 
 const defaultOption = {
 	serviceType: "",
@@ -85,6 +87,7 @@ const defaultOption = {
 		days: [],
 	},
 	anchorDate: null,
+	updatedAt: null,
 	expectedItemOrService: [],
 	serviceDuration: "15",
 	notes: "",
@@ -94,7 +97,7 @@ const defaultOption = {
 	isUpdating: true,
 };
 
-const GeneratorRoutes = ({ onClickBack, genId }) => {
+const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }) => {
 	const {
 		control,
 		handleSubmit,
@@ -158,25 +161,59 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	const [octoMarketProfile, setOctoMarketProfile] = useState(null);
 	const [disableButton, setDisableButton] = useState(false);
 	const [itemsOptions, setItemsOptions] = useState([]);
-	const [generatorData, setGeneratorData] = useState(null);
 	const [itemsMap, setItemsMap] = useState({});
 	const [cancelReason, setCancelReason] = useState("");
-	const [subContractorData, setSubContractorData] = useState([]);
-	const [isOctoMarketUser, setIsOctoMarketUser] = useState(false);
 	const [currentServiceSchedules, setCurrentServiceSchedules] = useState([]);
-	const [sentSubcontractorRequests, setSentSubcontractorRequests] = useState([]);
 	const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
-	const [activeSentSSRs, setActiveSentSSRs] = useState([]);
 	const [transporterName, setTransporterName] = useState("");
 	const [KeepContainers, setKeepContainers] = useState(false);
 	const [serviceFrequencyOptions, setServiceFrequencyOptions] = useState([
 		...frequencyPrimaryOptions,
 		...frequencySecondaryOptions,
 	]);
-	const [subcontractorServiveFrequencyOptions, setSubcontractorServiceFrequencyOptions] = useState([
-		...frequencyPrimaryOptions,
-		...frequencySecondaryOptions,
-	]);
+	const [selectedSSR, setSelectedSSR] = useState({});
+	const [terminationDate, setTerminationDate] = useState(null);
+	const [terminationNote, setTerminationNote] = useState("");
+	const [liveGeneratorData, setLiveGeneratorData] = useState(null);
+	useEffect(() => {
+		if (!generatorData?.id) return;
+		let unsubscribe = onSnapshot(doc(db, COLLECTIONS.generators, generatorData?.id), (doc) => {
+			if (doc.exists()) {
+				const data = { ...doc.data(), id: doc.id };
+				setLiveGeneratorData(data);
+			}
+		});
+		return () => {
+			if (unsubscribe) unsubscribe();
+		};
+	}, [generatorData]);
+
+	useEffect(() => {
+		if (!liveGeneratorData) return;
+		if (
+			!liveGeneratorData?.serviceAddCoordinates ||
+			!liveGeneratorData?.serviceAddCoordinates.lat ||
+			!liveGeneratorData?.serviceAddCoordinates.lng
+		) {
+			setIsGeneratorProfileComplete(false);
+		}
+
+		if (
+			liveGeneratorData?.generatorStatus == "PROSPECT" ||
+			liveGeneratorData?.generatorStatus == "CANCELED" ||
+			liveGeneratorData?.generatorStatus == "DEAD_FILE"
+		) {
+			document.getElementById(`generator_not_contracted`).showModal();
+			return;
+		}
+
+		if (liveGeneratorData?.generatorStatus === "PARKING" || liveGeneratorData?.generatorStatus === "NIGO") {
+			document.getElementById(`generator_marked_as_NIGO_or_parking`).showModal();
+			return;
+		}
+		return () => {};
+	}, [liveGeneratorData]);
+
 	const fetchTransporter = async (transporterId) => {
 		let snapRef = doc(db, COLLECTIONS.transporters, transporterId);
 		let snapDoc = await getDoc(snapRef);
@@ -198,15 +235,33 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	}, [user, generatorData]);
 
 	const autoSaveInstructions = async (data) => {
-		if (!generatorData) return;
+		if (!generatorData || !user?.uid) return;
+
+		const currentTransporterId = user?.uid;
 
 		const hasRealChanges = Object.keys(data).some((key) => {
 			return data[key] !== prevInstructions[key];
 		});
+
 		if (!hasRealChanges) return;
-		await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
-		setPrevInstructions((prev) => ({ ...prev, ...data }));
-		showSuccessToastMessage("Service Instructions saved automatically");
+
+		try {
+			// Create the update object with the proper path to the transporter's instructions
+			const updateData = {};
+
+			Object.keys(data).forEach((key) => {
+				updateData[`transporterInstructions.${currentTransporterId}.${key}`] = data[key];
+			});
+
+			await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), updateData);
+			const getGenerator = await getGeneratorById(generatorData.id);
+			setGeneratorData(getGenerator);
+			setPrevInstructions((prev) => ({ ...prev, ...data }));
+			showSuccessToastMessage("Service Instructions saved automatically");
+		} catch (error) {
+			console.error("Error saving instructions:", error);
+			showErrorToastMessage("Failed to save instructions");
+		}
 	};
 
 	useEffect(() => {
@@ -224,6 +279,21 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			}
 		}
 	}, [allGeneratorsData, isLoadingServices]);
+
+	// In your component where you use the SSR functionality
+	const {
+		subContractorContainers,
+		handleSubcontractorSelected,
+		isOctoMarketUser,
+		subContractorData,
+		sentSubcontractorRequests,
+		activeSentSSRs,
+		cancelSubcontractorRequest,
+		sendSubcontractorRequest,
+		getServiceFrequencyForSubcontractor,
+		subcontractorServiveFrequencyOptions,
+	} = useSSRManagement(user?.uid, generatorData?.id);
+
 	useEffect(() => {
 		if (!generatorData?.id) return;
 		let unsubscribe = onSnapshot(
@@ -259,27 +329,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			if (unsubscribe) unsubscribe();
 		};
 	}, [user]);
-
-	function getServiceFrequencyForSubcontractor(userId) {
-		if (!userId) return () => {};
-		const unsubscribe = onSnapshot(doc(db, COLLECTIONS.serviceSettings, userId), (doc) => {
-			if (doc.exists()) {
-				const data = doc.data();
-				if (data?.serviceFrequencies?.length > 0) {
-					const tempFrequencyOptions = [];
-					data?.serviceFrequencies?.forEach((item) => {
-						const frequency = subcontractorServiveFrequencyOptions.find((option) => option.value === item);
-						if (frequency) {
-							tempFrequencyOptions.push(frequency);
-						}
-					});
-					setSubcontractorServiceFrequencyOptions(tempFrequencyOptions);
-				}
-			}
-		});
-		return unsubscribe;
-	}
-
 	useEffect(() => {
 		if (!user || !user?.uid) return;
 		let unsubscribe = onSnapshot(doc(db, COLLECTIONS.transporters, user?.uid), (snap) => {
@@ -303,28 +352,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			if (unsubscribe) unsubscribe();
 		};
 	}, [user]);
-	// useEffect(() => {
-	// 	let unsubscribe = onSnapshot(collection(db,"priceBooks",transporterId,"default", "services", "containers"), (snap) => {
-	// 		if (snap.docs.length) {
-	// 			let tempOptions = [];
-	// 			let tempMap = {};
-	// 			snap.docs.forEach((el) => {
-	// 				tempOptions.push({
-	// 					label: el.data()?.masterItemName ?? "--",
-	// 					value: el.id,
-	// 					subWasteType: el.data()?.subWasteType,
-	// 				});
-	// 				tempMap[el.id] = el.data()?.masterItemName ?? "--";
-	// 			});
-	// 			setItemsOptions(tempOptions);
-	// 			setItemsMap(tempMap);
-	// 		}
-	// 	});
-	// 	return () => {
-	// 		if (unsubscribe) unsubscribe();
-	// 	};
-	// }, []);
-	const [subContractorContainers, setSubContractorContainers] = useState([]);
 
 	const fetchContainers = useCallback(async (transporterId) => {
 		if (!transporterId) {
@@ -385,63 +412,38 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		}
 	}, [user?.uid]);
 
-	const handleSubcontractorSelected = useCallback(async (subcontractorId) => {
-		if (!subcontractorId) {
-			setSubContractorContainers([]);
-			return;
-		}
-
-		try {
-			const containers = await fetchContainers(subcontractorId);
-			setSubContractorContainers(containers);
-			getServiceFrequencyForSubcontractor(subcontractorId);
-		} catch (error) {
-			console.error("Failed to fetch subcontractor containers:", error);
-			setSubContractorContainers([]);
-		}
-	}, []);
-
 	useEffect(() => {
-		if (!generatorData) return;
-		setInstructionsValue("deliveryNote", generatorData?.deliveryNote ?? "");
-		setInstructionsValue("locationOfWaste", generatorData?.locationOfWaste ?? "");
-		setInstructionsValue("lockBoxCode", generatorData?.lockBoxCode ?? "");
-		setInstructionsValue("parkingNote", generatorData?.parkingNote ?? "");
-		setInstructionsValue("serviceInstructions", generatorData?.serviceInstructions ?? "");
-		setInstructionsValue("octoConnectNote", generatorData?.octoConnectNote ?? "");
+		if (!generatorData || !user?.uid) return;
+
+		const currentTransporterId = user?.uid;
+		const transporterInstructions = generatorData?.transporterInstructions?.[currentTransporterId];
+		const emptyInstructions = {
+			deliveryNote: "",
+			locationOfWaste: "",
+			lockBoxCode: "",
+			parkingNote: "",
+			serviceInstructions: "",
+			octoConnectNote: "",
+		};
+
+		const instructions = transporterInstructions || emptyInstructions;
+
+		setInstructionsValue("deliveryNote", instructions.deliveryNote);
+		setInstructionsValue("locationOfWaste", instructions.locationOfWaste);
+		setInstructionsValue("lockBoxCode", instructions.lockBoxCode);
+		setInstructionsValue("parkingNote", instructions.parkingNote);
+		setInstructionsValue("serviceInstructions", instructions.serviceInstructions);
+		setInstructionsValue("octoConnectNote", instructions.octoConnectNote);
+
 		setPrevInstructions({
-			deliveryNote: generatorData?.deliveryNote ?? "",
-			locationOfWaste: generatorData?.locationOfWaste ?? "",
-			lockBoxCode: generatorData?.lockBoxCode ?? "",
-			parkingNote: generatorData?.parkingNote ?? "",
-			serviceInstructions: generatorData?.serviceInstructions ?? "",
-			octoConnectNote: generatorData?.octoConnectNote ?? "",
+			deliveryNote: instructions.deliveryNote,
+			locationOfWaste: instructions.locationOfWaste,
+			lockBoxCode: instructions.lockBoxCode,
+			parkingNote: instructions.parkingNote,
+			serviceInstructions: instructions.serviceInstructions,
+			octoConnectNote: instructions.octoConnectNote,
 		});
-		if (
-			!generatorData?.serviceAddCoordinates ||
-			!generatorData?.serviceAddCoordinates.lat ||
-			!generatorData?.serviceAddCoordinates.lng
-		) {
-			setIsGeneratorProfileComplete(false);
-		}
-		const allowedGeneratorStatus = generatorStatus.filter(
-			(status) => status.value !== "PROSPECT" && status.value !== "CANCELED" && status.value !== "DEAD_FILE"
-		);
-
-		const allowedGeneratorStatusValues = allowedGeneratorStatus.map((status) => status.value);
-		if (!allowedGeneratorStatusValues.includes(generatorData?.generatorStatus)) {
-			document.getElementById(`generator_not_contracted`).showModal();
-		}
-
-		const allowedContractedStatus = generatorStatus.filter(
-			(status) => status.value == "CONTRACTED_SCHEDULED" || status.value == "CONTRACTED_UNSCHEDULED"
-		);
-
-		const allowedGeneratorContractValues = allowedContractedStatus.map((status) => status.value);
-		if (!allowedGeneratorContractValues.includes(generatorData?.generatorStatus)) {
-			document.getElementById(`generator_marked_as_NIGO_or_parking`).showModal();
-		}
-	}, [generatorData]);
+	}, [generatorData, user?.uid, setInstructionsValue]);
 
 	useEffect(() => {
 		if (!isGeneratorProfileComplete) {
@@ -457,34 +459,57 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				where("transporterId", "==", user?.uid)
 			)
 		);
-		const tempSchedules = [];
-		snap.docs.forEach(async (el) => {
-			if (el.exists()) {
+		const tempSchedules = snap.docs
+			.filter((el) => el.exists())
+			.map((el) => {
 				const data = { ...el.data(), id: el.id };
+
 				if (typeof data.serviceType !== "string") {
 					data.serviceType = data.serviceType[0];
 				}
 				if (!data.hasOwnProperty("isDeleted") || data.isDeleted === false) {
 					delete data.upcomingDates;
-					tempSchedules.push(data);
+					const sourceDate = data.updatedAt || data.createdAt;
+
+					if (sourceDate) {
+						if (sourceDate.toDate && typeof sourceDate.toDate === "function") {
+							data.establishedDate = sourceDate.toDate();
+						} else if (sourceDate.seconds !== undefined) {
+							data.establishedDate = new Date(sourceDate.seconds * 1000);
+						} else if (sourceDate instanceof Date) {
+							data.establishedDate = sourceDate;
+						} else if (typeof sourceDate === "string") {
+							data.establishedDate = new Date(sourceDate);
+						}
+					}
+
+					return data;
 				}
-			}
-		});
-		console.log({ tempSchedules });
+				return null;
+			})
+			.filter(Boolean);
+
 		tempSchedules.sort((a, b) => {
-			let dateA = null;
-			let dateB = null;
-			if (typeof a?.createdAt?.seconds === "number" || typeof a?.createdAt?.nanoseconds === "number") {
-				dateA = new Timestamp(a.createdAt.seconds, a.createdAt.nanoseconds).toDate();
-			} else {
-				dateA = a.createdAt.toDate();
-			}
-			if (typeof b?.createdAt?.seconds === "number" || typeof b?.createdAt?.nanoseconds === "number") {
-				dateB = new Timestamp(b.createdAt.seconds, b.createdAt.nanoseconds).toDate();
-			} else {
-				dateB = b.createdAt.toDate();
-			}
-			return dateA - dateB;
+			const getDateValue = (item) => {
+				if (!item?.createdAt) return new Date(0);
+
+				try {
+					if (item.createdAt.toDate && typeof item.createdAt.toDate === "function") {
+						return item.createdAt.toDate();
+					}
+					if (item.createdAt.seconds !== undefined) {
+						return new Date(item.createdAt.seconds * 1000);
+					}
+					if (item.createdAt instanceof Date) {
+						return item.createdAt;
+					}
+					return new Date(item.createdAt);
+				} catch (e) {
+					return new Date(0);
+				}
+			};
+
+			return getDateValue(a) - getDateValue(b);
 		});
 		setValue("serviceSchedules", tempSchedules);
 		setPrevServiceSchedules(tempSchedules);
@@ -813,6 +838,8 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				...formValues.serviceSchedules[index],
 				generatorId: generatorData.id,
 				transporterId: user?.uid,
+				contractorId:generatorData?.transporterId,
+				subcontractorId:user?.uid,
 				createdAt: serverTimestamp(),
 			};
 			console.log("Data to save:", data);
@@ -901,11 +928,18 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 	};
 
 	const instructionSubmitHandler = async (data) => {
-		if (!generatorData) return;
+		if (!generatorData || !user?.uid) return;
+		const currentTransporterId = user?.uid;
 
 		try {
 			showLoadingToastMessage("Saving Service Instructions.");
-			await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), data);
+			const updateData = {
+				[`transporterInstructions.${currentTransporterId}`]: data,
+			};
+
+			await updateDoc(doc(db, COLLECTIONS.generators, generatorData.id), updateData);
+			const getGenerator = await getGeneratorById(generatorData.id);
+			setGeneratorData(getGenerator);
 			setPrevInstructions(data);
 			showSuccessToastMessage("Service Instructions saved successfully.");
 		} catch (error) {
@@ -913,39 +947,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			showInternalServerErrorToastMessage();
 		}
 	};
-
-	const fetchSentSubcontractorRequests = useCallback(async () => {
-		if (!user?.uid || !generatorData?.id) return;
-
-		try {
-			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user.uid);
-			const transporterDoc = await getDoc(currentTransporterRef);
-
-			if (transporterDoc.exists()) {
-				const transporterData = transporterDoc.data();
-				const sentRequests = transporterData.sharedGenerators?.fromMe || [];
-				const filteredSentRequests = sentRequests
-					.filter((req) => req.genId === generatorData.id)
-					.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-				const receivedRequests = transporterData.sharedGenerators?.toMe || [];
-				const filteredReceivedRequests = receivedRequests
-					.filter((req) => req.genId === generatorData.id && req.status === SERVICE_STATUS.ACCEPTED)
-					.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-				setSentSubcontractorRequests(filteredSentRequests);
-				const activeSent = filteredSentRequests.filter((req) => req.status !== SERVICE_STATUS.CANCELLED);
-				const combinedRequests = [...activeSent, ...filteredReceivedRequests];
-				setActiveSentSSRs(combinedRequests);
-			}
-		} catch (error) {
-			console.error("Error fetching subcontractor requests:", error);
-		}
-	}, [user?.uid, generatorData?.id]);
-
-	useEffect(() => {
-		if (user?.uid && generatorData?.id) {
-			fetchSentSubcontractorRequests();
-		}
-	}, [user?.uid, generatorData?.id, fetchSentSubcontractorRequests]);
 
 	const handleCopyToClipboard = async () => {
 		try {
@@ -1026,6 +1027,8 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 
 	const SsrActionButtons = memo(
 		({ isReadOnly, onCancel, onSubmit, currentSSRIndex, setCurrentSSRIndex, sentSubcontractorRequests }) => {
+			const currentSsr = sentSubcontractorRequests[currentSSRIndex];
+
 			return (
 				<div className="w-full flex justify-end p-2 gap-4">
 					{!isReadOnly && (
@@ -1050,13 +1053,17 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						<>
 							<button
 								type="button"
-								className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+								className={`rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition ${
+									currentSsr.status == "TERMINATED" ? "bg-gray-300" : ""
+								}`}
 								onClick={() => {
-									setCurrentSSRIndex(sentSubcontractorRequests.findIndex((r) => r.ssrId === ssr.ssrId));
+									setCurrentSSRIndex(currentSSRIndex);
+									setSelectedSSR(currentSsr);
 									document.getElementById(`delete-SSR`).showModal();
 								}}
+								disabled={currentSsr.status == "TERMINATED"}
 							>
-								Termination Request Form
+								{currentSsr.status == SERVICE_STATUS.ACCEPTED ? "Termination Request Form" : "Cancel"}
 							</button>
 						</>
 					)}
@@ -1064,6 +1071,7 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 			);
 		}
 	);
+	SsrActionButtons.displayName = "SsrActionButtons";
 
 	const renderSSRButton = () => {
 		let isDisable = false;
@@ -1114,37 +1122,6 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		);
 	};
 
-	const renderSSRForm = (isReadOnly, ssrData) => {
-		return (
-			<SsrFormComponent
-				isReadOnly={isReadOnly}
-				ssrData={ssrData}
-				formValues={formValues}
-				control={control}
-				trigger={trigger}
-				setValue={setValue}
-				getValues={getValues}
-				errors={errors}
-				serviceFrequencyOptions={serviceFrequencyOptions}
-				weekdayOptions={weekdayOptions}
-				subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
-				subContractorData={subContractorData}
-				itemsMap={itemsMap}
-				serviceTypes={serviceTypes}
-				subContractorContainers={subContractorContainers}
-				itemsOptions={itemsOptions}
-				handleSubcontractorSelected={handleSubcontractorSelected}
-				SERVICE_TYPES={SERVICE_TYPES}
-				serviceNoteRef={serviceNoteRef}
-				KeepContainers={KeepContainers}
-				setKeepContainers={setKeepContainers}
-				serviceDurationOptions={serviceDurationOptions}
-				transporterData={transporterData}
-				currentUserId={user?.uid}
-				watch={watch}
-			/>
-		);
-	};
 	const renderOperatingHours = (date = new Date()) => {
 		const dayNo = date.getDay();
 		const dayName = daysOfWeek[dayNo];
@@ -1260,342 +1237,41 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 		}
 	};
 
-	let formatAdd = (transporter) => {
-		let formattedAdd = "";
-		transporter.billingAddress?.street?.trim()?.length
-			? (formattedAdd += transporter.billingAddress?.street)
-			: (formattedAdd = "");
-		transporter.billingAddress?.suite?.trim()?.length && formattedAdd?.length
-			? (formattedAdd += `, ${transporter.billingAddress?.suite}`)
-			: (formattedAdd += transporter.billingAddress?.suite ?? "");
-		transporter.billingAddress?.city?.trim()?.length && formattedAdd?.length
-			? (formattedAdd += `, ${transporter.billingAddress?.city}`)
-			: (formattedAdd += transporter.billingAddress?.city ?? "");
-		transporter.billingAddress?.state?.trim()?.length && formattedAdd?.length
-			? (formattedAdd += `, ${transporter.billingAddress?.state}`)
-			: (formattedAdd += transporter.billingAddress?.state ?? "");
-		transporter.billingAddress?.zipCode?.trim()?.length && formattedAdd?.length
-			? (formattedAdd += ` ${transporter.billingAddress?.zipCode}`)
-			: (formattedAdd += transporter.billingAddress?.zipCode ?? "");
+	const handleCancelCurrentSSR = () => {
+		console.log("Cancel reason:", cancelReason);
+		if (sentSubcontractorRequests[currentSSRIndex]?.status === SERVICE_STATUS.ACCEPTED) {
+			console.log("termination date", terminationDate);
 
-		return formattedAdd.length ? formattedAdd : "--";
-	};
-
-	const fetchContractorData = async (transporterId) => {
-		try {
-			const transporterDoc = await getDoc(doc(db, COLLECTIONS.transporters, transporterId));
-			const transporterMarketDoc = await getDoc(doc(db, COLLECTIONS.octoMarketUsers, transporterId));
-
-			if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
-				console.log("No such transporter!");
-				return [];
-			}
-
-			setIsOctoMarketUser(true);
-
-			const data = transporterDoc.data();
-			const transporterMarketData = transporterMarketDoc.data();
-
-			if (!transporterMarketData) return [];
-
-			const contractorRelationships = transporterMarketData.connections || {};
-			const acceptedRelationships = Object.entries(contractorRelationships).filter(
-				([_, relationship]) => relationship.status === "accepted"
-			);
-			const contractorPromises = acceptedRelationships.map(async ([contractorId, relationship]) => {
-				const contractorDoc = await getDoc(doc(db, COLLECTIONS.transporters, contractorId));
-
-				if (!contractorDoc.exists()) return null;
-
-				const contractorData = contractorDoc.data();
-				return {
-					id: contractorId,
-					contractorDocid: contractorDoc.id,
-					contractorName: contractorData.companyName ?? "--",
-					address: formatAdd(contractorData),
-					generalEmail: contractorData.generalEmail?.length > 0 ? contractorData.generalEmail : "--",
-					phoneNumber: contractorData.phoneNumber ?? "--",
-					website: contractorData.website?.length ? contractorData.website : "--",
-					sharedGenerators: contractorData.allGens?.length ?? 0,
-					startDate: relationship.startDate,
-					status: relationship.status,
-					transporterOctoId: contractorData.transporterOctoId,
-				};
+			cancelSubcontractorRequest(
+				sentSubcontractorRequests[currentSSRIndex],
+				cancelReason,
+				terminationDate,
+				terminationNote
+			).then((success) => {
+				if (success) {
+					document.getElementById(`delete-SSR`).close();
+					setCancelReason("");
+					setTerminationDate(new Date());
+				}
 			});
-
-			const contractors = await Promise.all(contractorPromises);
-			return contractors.filter(Boolean);
-		} catch (error) {
-			console.error("Error fetching contractor data:", error);
-			return [];
+		} else {
+			cancelSubcontractorRequest(sentSubcontractorRequests[currentSSRIndex], cancelReason).then((success) => {
+				if (success) {
+					document.getElementById(`delete-SSR`).close();
+					setCancelReason("");
+				}
+			});
 		}
 	};
 
-	useEffect(() => {
-		const loadSubcontractors = async () => {
-			if (!user || !user.uid) return;
-			console.log("userrrr", user);
+	const { fetchSentSubcontractorRequests } = useSSRManagement(user?.uid, generatorData?.id);
 
-			try {
-				const subcontractors = await fetchContractorData(user.uid);
-				console.log("subcontractors", subcontractors);
-				setSubContractorData(subcontractors);
-			} catch (error) {
-				console.error("Error loading subcontractors:", error);
-			}
-		};
-
-		loadSubcontractors();
-	}, [user]);
-
-	const resetFormForNewSSR = useCallback(() => {
-		setValue("selectedSubContractor", null);
-		setValue("serviceSchedules.serviceFrequency.type", "");
-		setValue("serviceSchedules.serviceType", "");
-		setValue("serviceSchedules.serviceDuration", "15");
-		setValue("serviceSchedules.expectedItemOrService", []);
-		setValue("serviceNote", "");
-		setValue("requestedStartDate", null);
-	}, [setValue]);
-
-	const handleSendToSubcontractor = useCallback(async () => {
-		if (!user || !user?.uid) return;
-		try {
-			const isValid = await trigger();
-			if (!isValid) {
-				console.log("Validation errors:", errors);
-				return;
-			}
-
-			const formData = getValues();
-
-			const serviceDuration = formData.serviceSchedules?.serviceDuration || "15";
-			const weekdays =
-				formData.serviceSchedules?.serviceFrequency?.type === "MTWM"
-					? formData.serviceSchedules?.serviceFrequency?.days || []
-					: [];
-
-			const serviceRequest = {
-				genId: generatorData?.id,
-				serviceFrequency: formData.serviceSchedules?.serviceFrequency?.type,
-				weekdays: weekdays,
-				serviceType: formData.serviceSchedules?.serviceType,
-				requestedStartDate: formData.requestedStartDate,
-				serviceDuration: serviceDuration,
-				expectedItemsOrServices: formData.serviceSchedules?.expectedItemOrService || [],
-				serviceNote: formData.serviceNote || "",
-				subcontractorId: formData.selectedSubContractor.id,
-				subContractorName: formData.selectedSubContractor.Cname,
-				status: SERVICE_STATUS.PENDING,
-				createdAt: new Date().toISOString(),
-				timeStamp: new Date(),
-				ssrId: Date.now().toString(),
-				transporterName: transporterData.companyName,
-				transporterId: user?.uid,
-			};
-
-			const batch = writeBatch(db);
-
-			const transporterRef = doc(db, COLLECTIONS.transporters, formData.selectedSubContractor.id);
-			const transporterDoc = await getDoc(transporterRef);
-
-			if (transporterDoc.exists()) {
-				let transporterData = transporterDoc.data();
-				let sharedGenerators = transporterData.sharedGenerators || {};
-				sharedGenerators.toMe = sharedGenerators.toMe || [];
-				sharedGenerators.toMe.push(serviceRequest);
-				batch.update(transporterRef, { sharedGenerators });
-			} else {
-				console.log("Transporter not found.");
-				return;
-			}
-
-			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
-			const currentransporterDoc = await getDoc(currentTransporterRef);
-
-			if (currentransporterDoc.exists()) {
-				let transporterData = currentransporterDoc.data();
-				let sharedGenerators = transporterData.sharedGenerators || {};
-
-				if (!sharedGenerators.fromMe) {
-					sharedGenerators.fromMe = [];
-				}
-
-				sharedGenerators.fromMe.push(serviceRequest);
-				batch.update(currentTransporterRef, { sharedGenerators });
-			} else {
-				console.log("Transporter not found.");
-				return;
-			}
-
-			const subcontractorNotificationRef = doc(db, "notifications", formData.selectedSubContractor.id);
-			const notificationDocSnapshot = await getDoc(subcontractorNotificationRef);
-
-			if (!notificationDocSnapshot.exists()) {
-				batch.set(subcontractorNotificationRef, {
-					created: new Date(),
-				});
-			}
-
-			const newNotification = {
-				id: Date.now().toString(),
-				topic: "New SSR Request",
-				type: "SSR_Request",
-				message: `A new Subcontractor Service Request has been received from ${transporterData.companyName} for ${generatorData.generatorName}`,
-				read: false,
-				timeStamp: new Date(),
-			};
-
-			const today = new Date();
-			const todayISOString = today.toISOString().split("T")[0] + "T00:00:00.000Z";
-			const dailyNotificationRef = doc(collection(subcontractorNotificationRef, "dailyNotifications"), todayISOString);
-
-			const dailyNotificationDoc = await getDoc(dailyNotificationRef);
-
-			if (dailyNotificationDoc.exists()) {
-				const existingData = dailyNotificationDoc.data();
-				let notifications = Array.isArray(existingData.notifications) ? [...existingData.notifications] : [];
-
-				notifications.push(newNotification);
-				batch.update(dailyNotificationRef, { notifications });
-			} else {
-				batch.set(dailyNotificationRef, {
-					notifications: [newNotification],
-					dateCreated: new Date(),
-				});
-			}
-
-			await batch.commit();
-
-			setSentSubcontractorRequests((prev) => [serviceRequest, ...prev]);
-			setActiveSentSSRs((prev) => [serviceRequest, ...prev]);
-
-			showSuccessToastMessage(
-				`Subcontractor Service Request sent to ${formData.selectedSubContractor.Cname} Successfully!`
-			);
+	const handleSSRRequestSent = useCallback(async () => {
+		if (user?.uid && generatorData?.id) {
+			await fetchSentSubcontractorRequests();
 			setShowSSRForm(false);
-			setTimeout(() => {
-				resetFormForNewSSR();
-			}, 300);
-		} catch (error) {
-			console.error("Error sending request:", error);
-			showErrorToastMessage("Error sending request to subcontractor");
 		}
-	}, [user, getValues, trigger, errors, resetFormForNewSSR]);
-
-	const handleCancelCurrentSSR = async () => {
-		if (!cancelReason) {
-			showErrorToastMessage("Cancellation note is required.");
-			return;
-		}
-
-		const ssrToCancel = sentSubcontractorRequests[currentSSRIndex];
-		if (!ssrToCancel) {
-			showErrorToastMessage("Cannot identify the SSR to cancel");
-			return;
-		}
-
-		try {
-			const batch = writeBatch(db);
-			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
-			const transporterDoc = await getDoc(currentTransporterRef);
-			const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
-			const subcontractorDoc = await getDoc(subcontractorRef);
-
-			const cancellationData = {
-				status: SERVICE_STATUS.CANCELLED,
-				cancellationNote: cancelReason,
-				cancelledAt: new Date().toISOString(),
-			};
-
-			if (transporterDoc.exists()) {
-				const transporterData = transporterDoc.data();
-				let sharedGenerators = transporterData.sharedGenerators || {};
-
-				if (sharedGenerators.fromMe && sharedGenerators.fromMe.length) {
-					const requestIndex = sharedGenerators.fromMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
-
-					if (requestIndex !== -1) {
-						sharedGenerators.fromMe[requestIndex] = {
-							...sharedGenerators.fromMe[requestIndex],
-							...cancellationData,
-						};
-
-						batch.update(currentTransporterRef, { sharedGenerators });
-					}
-				}
-			}
-
-			if (subcontractorDoc.exists()) {
-				const subcontractorData = subcontractorDoc.data();
-				let subSharedGenerators = subcontractorData.sharedGenerators || {};
-
-				if (subSharedGenerators.toMe && subSharedGenerators.toMe.length) {
-					const subRequestIndex = subSharedGenerators.toMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
-
-					if (subRequestIndex !== -1) {
-						subSharedGenerators.toMe[subRequestIndex] = {
-							...subSharedGenerators.toMe[subRequestIndex],
-							...cancellationData,
-						};
-
-						batch.update(subcontractorRef, { sharedGenerators: subSharedGenerators });
-					}
-				}
-			}
-
-			const generatorId = ssrToCancel.genId;
-			if (!generatorId) {
-				showErrorToastMessage("Generator ID not found in the SSR");
-				return;
-			}
-			const generatorRef = doc(db, COLLECTIONS.generators, generatorId);
-			const generatorDoc = await getDoc(generatorRef);
-
-			if (!generatorDoc.exists()) {
-				console.error("Generator document not found");
-				return;
-			}
-
-			const generatorData = generatorDoc.data();
-			const existingSubcontractors = generatorData.subContractors || [];
-			const remainingSubcontractors = existingSubcontractors.filter((sub) => sub.id !== ssrToCancel.subcontractorId);
-
-			const filteredSSRforGen = activeSentSSRs.filter(
-				(ssrs) => ssrs.genId === generatorId && ssrs.subcontractorId == ssrToCancel.subcontractorId
-			);
-			let updatedSubcontractors = generatorData.subContractors;
-			if (filteredSSRforGen.length === 1) {
-				updatedSubcontractors = remainingSubcontractors;
-
-				batch.update(generatorRef, {
-					subContractors: updatedSubcontractors,
-					isSubContracted: remainingSubcontractors.length > 0,
-				});
-			}
-
-			await batch.commit();
-			const updatedRequests = sentSubcontractorRequests.map((req) =>
-				req.ssrId === ssrToCancel.ssrId
-					? {
-							...req,
-							...cancellationData,
-					  }
-					: req
-			);
-
-			setSentSubcontractorRequests(updatedRequests);
-			setActiveSentSSRs((prevActive) => prevActive.filter((ssr) => ssr.ssrId !== ssrToCancel.ssrId));
-
-			showSuccessToastMessage("Subcontractor request cancelled successfully");
-			resetFormForNewSSR();
-			document.getElementById(`delete-SSR`).close();
-			setCancelReason("");
-		} catch (error) {
-			console.error("Error cancelling SSR:", error);
-			showErrorToastMessage("Error cancelling subcontractor request");
-		}
-	};
+	}, [user?.uid, generatorData?.id]);
 
 	const isReadOnly = useMemo(() => user?.uid !== generatorData?.transporterId, [user, generatorData]);
 	const filteredRouteOptions = useMemo(() => {
@@ -1719,37 +1395,49 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 				transporterName={transporterName}
 				isReadOnly={isReadOnly}
 			/>
-			<div className="rounded-xl overflow-clip">
-				<AzureMapsProvider>
-					<RouteAssignment
-						allRoutes={allRoutes}
-						selectedRoutes={selectedRouteIds}
-						generatorData={generatorData}
-						getValues={getValues}
-						allGeneratorsData={allGeneratorsData}
-						allTreatmentData={allTreatmentData}
-						allVendorData={allVendorData}
-						serviceSchedules={prevServiceSchedules}
-						routeOptions={routeOptions}
-					/>
-				</AzureMapsProvider>
-			</div>
+			<MemoizedMapSection
+				generatorData={generatorData}
+				allRoutes={allRoutes}
+				selectedRouteIds={selectedRouteIds}
+				allGeneratorsData={allGeneratorsData}
+				allTreatmentData={allTreatmentData}
+				allVendorData={allVendorData}
+				prevServiceSchedules={prevServiceSchedules}
+				routeOptions={routeOptions}
+			/>
 			{activeSentSSRs.length > 0 && generatorData?.transporterId != user?.uid && (
 				<div>
 					<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Subcontractor Service Requests (SSR)</h6>
 
 					{activeSentSSRs.map((ssr, index) => (
 						<div key={ssr.ssrId || index} className="pb-4">
-							{renderSSRForm(true, ssr)}
-							{!isReadOnly && (
-								<SsrActionButtons
-									isReadOnly={true}
-									ssr={ssr}
-									currentSSRIndex={currentSSRIndex}
-									setCurrentSSRIndex={setCurrentSSRIndex}
-									sentSubcontractorRequests={sentSubcontractorRequests}
-								/>
-							)}
+							<SsrFormComponent
+								isReadOnly={true}
+								ssrData={ssr}
+								control={control}
+								trigger={trigger}
+								setValue={setValue}
+								getValues={getValues}
+								watch={watch}
+								errors={errors}
+								serviceFrequencyOptions={serviceFrequencyOptions}
+								weekdayOptions={weekdayOptions}
+								subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+								subContractorData={subContractorData}
+								itemsMap={itemsMap}
+								serviceTypes={serviceTypes}
+								subContractorContainers={subContractorContainers}
+								itemsOptions={itemsOptions}
+								handleSubcontractorSelected={handleSubcontractorSelected}
+								SERVICE_TYPES={SERVICE_TYPES}
+								serviceNoteRef={serviceNoteRef}
+								KeepContainers={KeepContainers}
+								setKeepContainers={setKeepContainers}
+								serviceDurationOptions={serviceDurationOptions}
+								transporterData={transporterData}
+								currentUserId={user?.uid}
+								generatorData={generatorData}
+							/>
 						</div>
 					))}
 				</div>
@@ -1860,8 +1548,45 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 										/>
 									</div>
 								</div>
+
 								{errors.serviceSchedules?.[index]?.anchorDate && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].anchorDate.message}</p>
+								)}
+								{watchServiceSchedules[index]?.id && (
+									<div className="flex items-center justify-between my-4">
+										<label htmlFor={`establishedDate-${index}`} className="truncate text-inputLabel font-normal">
+											Established Date
+										</label>
+										<div className="w-2/3">
+											<div className="bg-gray-100 p-2 rounded-full px-4 text-cardTextGray">
+												{(() => {
+													const date = watchServiceSchedules[index]?.establishedDate;
+													if (!date) return "--";
+													const getFormattedDate = (dateValue) => {
+														try {
+															if (dateValue && typeof dateValue === "object" && dateValue.seconds !== undefined) {
+																return dateFormatter(new Date(dateValue.seconds * 1000));
+															}
+															if (dateValue instanceof Date) {
+																return dateFormatter(dateValue);
+															}
+															if (typeof dateValue === "string") {
+																const parsedDate = new Date(dateValue);
+																if (!isNaN(parsedDate.getTime())) {
+																	return dateFormatter(parsedDate);
+																}
+															}
+															return "--";
+														} catch (e) {
+															return "--";
+														}
+													};
+
+													return getFormattedDate(date);
+												})()}
+											</div>
+										</div>
+									</div>
 								)}
 							</div>
 							<div className="w-1/2 ">
@@ -2188,94 +1913,149 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 						</dialog>
 					</div>
 				))}
+			</form>
+			<>
+				{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
+					<div>
+						<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Subcontractor Service Requests (SSR)</h6>
 
-				<>
-					{activeSentSSRs.length > 0 && generatorData?.transporterId == user?.uid && (
-						<div>
-							<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">
-								Subcontractor Service Requests (SSR)
-							</h6>
-
-							{activeSentSSRs.map((ssr, index) => (
-								<div key={ssr.ssrId || index} className="pb-4">
-									{renderSSRForm(true, ssr)}
+						{activeSentSSRs.map((ssr, index) => (
+							<div key={ssr.ssrId || index} className="pb-4">
+								{console.log("isRecieved", ssr)}
+								<SsrFormComponent
+									isReadOnly={true}
+									ssrData={ssr}
+									control={control}
+									trigger={trigger}
+									setValue={setValue}
+									getValues={getValues}
+									watch={watch}
+									errors={errors}
+									serviceFrequencyOptions={serviceFrequencyOptions}
+									weekdayOptions={weekdayOptions}
+									subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+									subContractorData={subContractorData}
+									itemsMap={itemsMap}
+									serviceTypes={serviceTypes}
+									subContractorContainers={subContractorContainers}
+									itemsOptions={itemsOptions}
+									handleSubcontractorSelected={handleSubcontractorSelected}
+									SERVICE_TYPES={SERVICE_TYPES}
+									serviceNoteRef={serviceNoteRef}
+									KeepContainers={KeepContainers}
+									setKeepContainers={setKeepContainers}
+									serviceDurationOptions={serviceDurationOptions}
+									transporterData={transporterData}
+									currentUserId={user?.uid}
+								/>
+								{!isReadOnly && (
 									<SsrActionButtons
 										isReadOnly={true}
 										ssr={ssr}
-										currentSSRIndex={currentSSRIndex}
+										currentSSRIndex={sentSubcontractorRequests.findIndex((r) => r.ssrId === ssr.ssrId)}
 										setCurrentSSRIndex={setCurrentSSRIndex}
 										sentSubcontractorRequests={sentSubcontractorRequests}
 									/>
-								</div>
-							))}
-						</div>
-					)}
-					{showSSRFrom && (
+								)}
+							</div>
+						))}
+					</div>
+				)}
+				{showSSRFrom && (
+					<div className="mb-8 pb-4">
 						<div className="mb-8 pb-4">
-							{renderSSRForm(false, null)}
-							<SsrActionButtons
-								isReadOnly={false}
-								onCancel={() => {
-									setShowSSRForm(false);
-									resetFormForNewSSR();
-								}}
-								onSubmit={handleSendToSubcontractor}
-								currentSSRIndex={currentSSRIndex}
-								setCurrentSSRIndex={setCurrentSSRIndex}
-								sentSubcontractorRequests={sentSubcontractorRequests}
+							<SsrFormStandalone
+								generatorData={generatorData}
+								transporterData={transporterData}
+								userId={user?.uid}
+								onClose={() => setShowSSRForm(false)}
+								serviceTypes={serviceTypes}
+								weekdayOptions={weekdayOptions}
+								serviceDurationOptions={serviceDurationOptions}
+								SERVICE_TYPES={SERVICE_TYPES}
+								subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+								serviceFrequencyOptions={serviceFrequencyOptions}
+								onRequestSent={handleSSRRequestSent}
 							/>
 						</div>
-					)}
+					</div>
+				)}
 
-					<dialog id={`delete-SSR`} className="modal">
-						<div className="modal-box">
-							<div>
-								<button
-									className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-									type="button"
-									onClick={() => {
-										document.getElementById(`delete-SSR`).close();
-										setCancelReason("");
-									}}
-								>
-									✕
-								</button>
-							</div>
-							<h3 className="font-bold text-lg">Are You Sure ?</h3>
-							<div className="flex py-5 gap-5 flex-col">
-								<p className="">Proceeding with this operation will cancel the Subcontractor Service Request</p>
-								<p>Enter Note for Cancellation *</p>
-								<textarea
-									rows={3}
-									value={cancelReason}
-									onChange={(e) => setCancelReason(e.target.value)}
-									className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
-								/>
-							</div>
-							<div className="flex w-full justify-between">
-								<button className="btn btn-error btn-sm" type="button" onClick={handleCancelCurrentSSR}>
-									Cancel Request
-								</button>
-								<button
-									type="button"
-									className="btn btn-primary btn-sm"
-									onClick={() => {
-										document.getElementById(`delete-SSR`).close();
-										setCancelReason("");
-									}}
-								>
-									Keep Request
-								</button>
-							</div>
+				<dialog id={`delete-SSR`} className="modal">
+					<div className="modal-box">
+						<div>
+							<button
+								className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+								type="button"
+								onClick={() => {
+									document.getElementById(`delete-SSR`).close();
+									setCancelReason("");
+								}}
+							>
+								✕
+							</button>
 						</div>
-					</dialog>
-				</>
+						<h3 className="font-bold text-lg">Are You Sure ?</h3>
+						<div className="flex py-5 gap-5 flex-col">
+							<p className="">{`Proceeding with this operation will ${
+								selectedSSR.status === SERVICE_STATUS.ACCEPTED ? "terminate" : "cancel"
+							} the Subcontractor Service Request`}</p>
+							{selectedSSR.status === SERVICE_STATUS.ACCEPTED && (
+								<>
+									<p>Requested Termination Date *</p>
+									<div className="w-2/3 h-2/3">
+										<CustomDatePicker
+											selectedDate={terminationDate}
+											setSelectedDate={setTerminationDate}
+											label={"Termination Date"}
+											startYear={new Date().getFullYear()}
+											endYear={new Date().getFullYear() + 5}
+											yearReversed={true}
+											minDate={new Date()}
+										/>
+									</div>
+								</>
+							)}
+							<p>{`Enter Note for ${
+								selectedSSR.status === SERVICE_STATUS.ACCEPTED ? "termination" : "cancelelation"
+							}  *`}</p>
 
-				<div className="grid items-center justify-center relative">
-					{generatorData.transporterId == user?.uid && renderSSRButton()}
-					<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
-				</div>
-			</form>
+							<textarea
+								rows={3}
+								value={selectedSSR.status === SERVICE_STATUS.ACCEPTED ? terminationNote : cancelReason}
+								onChange={(e) => {
+									if (selectedSSR.status === SERVICE_STATUS.ACCEPTED) {
+										setTerminationNote(e.target.value);
+									} else {
+										setCancelReason(e.target.value);
+									}
+								}}
+								className="w-full text-cardTextGray bg-inputBg border-none rounded-[20px] py-2 h-28 px-2 leading-tight focus:outline-none focus:ring-1 focus:ring-dashInActiveBtnText"
+							/>
+						</div>
+						<div className="flex w-full justify-between">
+							<button className="btn btn-error btn-sm" type="button" onClick={handleCancelCurrentSSR}>
+								{`${selectedSSR.status === SERVICE_STATUS.ACCEPTED ? "Terminate" : "Cancel"}  Request`}
+							</button>
+							<button
+								type="button"
+								className="btn btn-primary btn-sm"
+								onClick={() => {
+									document.getElementById(`delete-SSR`).close();
+									setCancelReason("");
+								}}
+							>
+								Keep Request
+							</button>
+						</div>
+					</div>
+				</dialog>
+			</>
+
+			<div className="grid items-center justify-center relative">
+				{generatorData.transporterId == user?.uid && renderSSRButton()}
+				<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
+			</div>
 
 			<div className="py-5">
 				<div className="flex flex-col gap-2">
@@ -2424,28 +2204,13 @@ const GeneratorRoutes = ({ onClickBack, genId }) => {
 											autoSaveInstructions({ serviceInstructions: e.target.value });
 										}}
 										label="Service Instructions"
+										ref={serviceNoteRef}
 									/>
 								)}
 							/>
 							{errors.serviceInstruction && (
 								<p className="text-red-500 text-sm mt-1">{errors.serviceInstruction.message}</p>
 							)}
-							{(showSSRFrom || activeSentSSRs.length > 0) && (
-								<Controller
-									name="octoConnectNote"
-									control={instructionControl}
-									render={({ field: { onChange, value } }) => (
-										<Textarea
-											value={value}
-											onChange={onChange}
-											isDisabled={isReadOnly}
-											label="OCTO Connect"
-											placeholder={"Contractor's Note"}
-										/>
-									)}
-								/>
-							)}
-							{errors.octoConnectNote && <p className="text-red-500 text-sm mt-1">{errors.octoConnectNote.message}</p>}
 						</div>
 					</div>
 				</div>
@@ -2492,3 +2257,176 @@ function calculateUpcomingDates(schedule) {
 	}
 	return [];
 }
+
+const SsrFormStandalone = ({
+	generatorData,
+	transporterData,
+	userId,
+	onClose,
+	serviceTypes,
+	weekdayOptions,
+	serviceDurationOptions,
+	SERVICE_TYPES,
+	subcontractorServiveFrequencyOptions,
+	serviceFrequencyOptions,
+	onRequestSent,
+}) => {
+	const {
+		control: ssrControl,
+		handleSubmit: ssrHandleSubmit,
+		formState: { errors: ssrErrors },
+		watch: ssrWatch,
+		setValue: ssrSetValue,
+		getValues: ssrGetValues,
+		reset: ssrReset,
+		trigger: ssrTrigger,
+		register: ssrRegister,
+	} = useForm({
+		defaultValues: {
+			selectedSubContractor: null,
+			serviceSchedules: {
+				serviceType: "",
+				serviceDuration: "15",
+				serviceFrequency: {
+					type: "",
+					days: [],
+				},
+				expectedItemOrService: [],
+			},
+			requestedStartDate: null,
+			serviceNote: "",
+		},
+		mode: "onChange",
+	});
+
+	useEffect(() => {
+		ssrRegister("selectedSubContractor", {
+			required: "Subcontractor is required",
+		});
+
+		ssrRegister("serviceSchedules.serviceFrequency.type", {
+			required: "Service Frequency is required",
+		});
+		ssrRegister("serviceSchedules.serviceFrequency.days", {
+			validate: (value) => {
+				const freqType = ssrWatch("serviceSchedules.serviceFrequency.type");
+				return freqType !== "MTWM" || (value && value.length > 0) || "Please select at least one weekday";
+			},
+		});
+
+		ssrRegister("requestedStartDate", {
+			required: "Start Date is required",
+		});
+
+		ssrRegister("serviceSchedules.serviceType", {
+			required: "Service Type is required",
+		});
+
+		ssrRegister("serviceSchedules.serviceDuration", {
+			required: "Service Duration is required",
+		});
+
+		ssrRegister("serviceSchedules.expectedItemOrService", {
+			validate: (value) => (Array.isArray(value) && value.length > 0) || "At least one container must be selected",
+		});
+	}, [ssrRegister, ssrWatch]);
+
+	const [currentSSRIndex, setCurrentSSRIndex] = useState(0);
+	const [KeepContainers, setKeepContainers] = useState(false);
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const serviceNoteRef = React.createRef();
+
+	const {
+		subContractorContainers,
+		handleSubcontractorSelected,
+		subContractorData,
+		activeSentSSRs,
+		sendSubcontractorRequest,
+		fetchSentSubcontractorRequests,
+		itemsMap,
+		itemsOptions,
+	} = useSSRManagement(userId, generatorData?.id);
+
+	const onSubmit = useCallback(
+		async (data) => {
+			try {
+				setIsSubmitting(true);
+				const success = await sendSubcontractorRequest(data, transporterData, generatorData);
+				if (success) {
+					await fetchSentSubcontractorRequests();
+					if (onRequestSent) {
+						onRequestSent();
+					}
+
+					ssrReset();
+					if (onClose) onClose();
+				}
+			} catch (error) {
+				console.error("Error submitting SSR form:", error);
+			} finally {
+				setIsSubmitting(false);
+			}
+		},
+		[
+			sendSubcontractorRequest,
+			fetchSentSubcontractorRequests,
+			transporterData,
+			generatorData,
+			onClose,
+			ssrReset,
+			onRequestSent,
+		]
+	);
+
+	return (
+		<div className="ssr-standalone-container">
+			<form onSubmit={ssrHandleSubmit(onSubmit)}>
+				<SsrFormComponent
+					isReadOnly={false}
+					ssrData={activeSentSSRs[currentSSRIndex]}
+					control={ssrControl}
+					trigger={ssrTrigger}
+					setValue={ssrSetValue}
+					getValues={ssrGetValues}
+					watch={ssrWatch}
+					errors={ssrErrors}
+					serviceFrequencyOptions={serviceFrequencyOptions}
+					weekdayOptions={weekdayOptions}
+					subcontractorServiveFrequencyOptions={subcontractorServiveFrequencyOptions}
+					subContractorData={subContractorData}
+					itemsMap={itemsMap}
+					serviceTypes={serviceTypes}
+					subContractorContainers={subContractorContainers}
+					itemsOptions={itemsOptions}
+					handleSubcontractorSelected={handleSubcontractorSelected}
+					SERVICE_TYPES={SERVICE_TYPES}
+					serviceNoteRef={serviceNoteRef}
+					KeepContainers={KeepContainers}
+					setKeepContainers={setKeepContainers}
+					serviceDurationOptions={serviceDurationOptions}
+					transporterData={transporterData}
+					currentUserId={userId}
+					generatorData={generatorData}
+				/>
+
+				<div className="w-full flex justify-end p-2 gap-4">
+					<button
+						type="button"
+						className="rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition"
+						onClick={onClose}
+						disabled={isSubmitting}
+					>
+						Cancel
+					</button>
+					<button
+						type="submit"
+						className="rounded-full px-4 py-2 text-sm bg-primary-500 hover:bg-primary-500/90 text-white transition"
+						disabled={isSubmitting}
+					>
+						{isSubmitting ? "Sending..." : "Send To Subcontractor"}
+					</button>
+				</div>
+			</form>
+		</div>
+	);
+};
