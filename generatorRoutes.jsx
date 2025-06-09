@@ -859,6 +859,9 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 			if (!data?.id) {
 				batch.update(doc(db, COLLECTIONS.generators, generatorData.id), {
 					serviceSchedules: arrayUnion(scheduleRef.id),
+					transporterId: user?.uid,
+				    contractorId:generatorData?.transporterId,
+				    subcontractorId:user?.uid,
 					updatedAt: serverTimestamp(),
 				});
 			}
@@ -1054,16 +1057,16 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 							<button
 								type="button"
 								className={`rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition ${
-									currentSsr.status == "TERMINATED" ? "bg-gray-300" : ""
+									currentSsr?.status == "TERMINATED" ? "bg-gray-300" : ""
 								}`}
 								onClick={() => {
 									setCurrentSSRIndex(currentSSRIndex);
 									setSelectedSSR(currentSsr);
 									document.getElementById(`delete-SSR`).showModal();
 								}}
-								disabled={currentSsr.status == "TERMINATED"}
+								disabled={currentSsr?.status == "TERMINATED"}
 							>
-								{currentSsr.status == SERVICE_STATUS.ACCEPTED ? "Termination Request Form" : "Cancel"}
+								{currentSsr?.status == SERVICE_STATUS.ACCEPTED ? "Termination Request Form" : "Cancel"}
 							</button>
 						</>
 					)}
