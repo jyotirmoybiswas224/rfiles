@@ -35,12 +35,11 @@ import {
 import CustomAzureGeneratorDashboardMap from "./CustomAzureGeneratorDashboardMap";
 import { AzureMapsProvider } from "react-azure-maps";
 import CalendarWithTimeSlots from "../../admin/generator-management/components/generators/components/detail-forms/components/open-calendar/GeneratorCalendarComponent";
-import { getGeneratorById, GetTransporterDataByUID } from "../../../utils/firebaseOperations";
+import { getGeneratorById } from "../../../utils/firebaseOperations";
 import { useGeneratorData } from "./components/GeneratorDataContext";
 import ChildDropdown from "./components/dropDowns/childDropdown";
 import ParentDropdown from "./components/dropDowns/parentDropdown";
 import GeneratorUserAccBtn from "../GenUserAccountButton/GeneratorUserAccountButton";
-import { flushSync } from "react-dom";
 
 const GeneratorDashboard = () => {
 	const { user, authLoading, generatorData: data, allServices: genService } = useGeneratorUser();
@@ -72,28 +71,40 @@ const GeneratorDashboard = () => {
 	const [serviceCompletionText, setServiceCompletionText] = useState("");
 	const [todayStartedRoute, setTodayStartedRoute] = useState();
 	const [isLoadingTracking, setIsLoadingTracking] = useState(false);
-	const [transporterData, setTransporterData] = useState([]);
+	const [transporterData, setTransporterData] = useState({});
+	const [driverId, setDriverId] = useState("");
+	const [allGenerators, setAllGenerators] = useState([]);
+	const [rootGeneratorIds, setRootGeneratorIds] = useState([]);
+	const [rootGeneratorId, setRootGeneratorId] = useState(null);
 
 	useEffect(() => {
-		if (!data?.id) return;
-
-		console.log("Initial data loading for generator:", data.id);
-		setIsLoadingTracking(true);
-		setGeneratorData(data);
-		if (data?.parentAccount) {
-			setParentAccount(false);
-		} else {
-			setParentAccount(true);
+		if (
+			data?.id &&
+			(!generatorData || (generatorData?.id === data?.id && JSON.stringify(data) !== JSON.stringify(generatorData)))
+		) {
+			console.log("Syncing generatorData between contexts");
+			setGeneratorData(data);
+			setIsLoadingTracking(false);
 		}
 	}, [data?.id]);
+	useEffect(() => {
+		if (user?.generatorIds && data?.id && rootGeneratorIds.length === 0) {
+			setRootGeneratorIds(Array.from(new Set([data.id, ...user.generatorIds])));
+			setRootGeneratorId(data.id);
+			console.log("Root generator IDs set:", rootGeneratorIds,user.generatorIds);
+		}
+	}, [data, rootGeneratorIds.length]);
 
 	useEffect(() => {
-		console.log("generatorData",generatorData);
-		
 		if (!generatorData?.id) return;
-		const q = query(collection(db, COLLECTIONS.serviceSchedules), where("generatorId", "==", generatorData?.id));
-		const unsubscribe = onSnapshot(q, async (snap) => {
-			try {
+
+		try {
+			if (typeof generatorData.id !== "string" || generatorData.id.trim() === "") {
+				console.warn("Invalid generator ID for query:", generatorData.id);
+				return;
+			}
+			const q = query(collection(db, COLLECTIONS.serviceSchedules), where("generatorId", "==", generatorData.id));
+			const unsubscribe = onSnapshot(q, async (snap) => {
 				console.log("Snapshot received:", snap);
 				const tempSchedules = await Promise.all(
 					snap.docs.map(async (el) => {
@@ -139,60 +150,76 @@ const GeneratorDashboard = () => {
 				setValue(formattedServiceTypes);
 				setServiceFrequency(uniqueServiceTypes);
 				console.log("Final schedules:", filteredSchedules);
-			} catch (error) {
-				console.error("Error processing snapshot:", error);
-			}
-		});
-		return () => {
-			console.log("Unsubscribing from snapshot listener");
-			unsubscribe();
-		};
+			});
+			return () => {
+				console.log("Unsubscribing from snapshot listener");
+				unsubscribe();
+			};
+		} catch (error) {
+			console.error("Error processing snapshot:", error);
+		}
 	}, [generatorData?.id]);
 
 	useEffect(() => {
 		if (!generatorData?.id) return;
 
-		const unsubscribe = onSnapshot(
-			query(collection(db, COLLECTIONS.generators), where("parentAccount", "==", data?.id)),
-			async (snap) => {
-				try {
-					const data = snap.docs.map((doc) => doc.data());
-					setChildrenData(data);
-				} catch (error) {
-					console.error("Error processing snapshot:", error);
-				}
+		try {
+			const parentAccountId = generatorData?.id;
+			if (typeof parentAccountId !== "string" || parentAccountId.trim() === "") {
+				console.warn("Invalid parent account ID for query", parentAccountId);
+				return;
 			}
-		);
-		const unsubscribe2 = onSnapshot(
-			query(collection(db, COLLECTIONS.generators), where("parentAccount", "==", generatorData.parentAccount)),
-			async (snap) => {
-				try {
-					const data = snap.docs.map((doc) => doc.data());
-					setSameParentGenerators(data);
-				} catch (error) {
-					console.error("Error processing snapshot:", error);
+
+			const unsubscribe = onSnapshot(
+				query(collection(db, COLLECTIONS.generators), where("parentAccount", "==", parentAccountId)),
+				async (snap) => {
+					try {
+						const fetchedData = snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
+						setChildrenData(fetchedData);
+					} catch (error) {
+						console.error("Error processing snapshot:", error);
+					}
 				}
+			);
+
+			const parentAccountValue = generatorData.parentAccount;
+			let unsubscribe2, unsubscribe3;
+
+			if (parentAccountValue && typeof parentAccountValue === "string" && parentAccountValue.trim() !== "") {
+				unsubscribe2 = onSnapshot(
+					query(collection(db, COLLECTIONS.generators), where("parentAccount", "==", parentAccountValue)),
+					async (snap) => {
+						try {
+							const data = snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
+							setSameParentGenerators(data);
+						} catch (error) {
+							console.error("Error processing snapshot:", error);
+						}
+					}
+				);
+
+				unsubscribe3 = onSnapshot(
+					query(collection(db, COLLECTIONS.generators), where("id", "==", parentAccountValue)),
+					async (snap) => {
+						try {
+							const data = snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
+							setParentGenerator(data);
+						} catch (error) {
+							console.error("Error processing snapshot:", error);
+						}
+					}
+				);
 			}
-		);
-		const unsubscribe3 = onSnapshot(
-			query(collection(db, COLLECTIONS.generators), where("id", "==", generatorData?.parentAccount)),
-			async (snap) => {
-				try {
-					const data = snap.docs.map((doc) => doc.data());
-					setParentGenerator(data);
-					console.log("psrentgen", data);
-				} catch (error) {
-					console.error("Error processing snapshot:", error);
-				}
-			}
-		);
-		return () => {
-			console.log("Unsubscribing from snapshot listener");
-			unsubscribe();
-			unsubscribe2();
-			unsubscribe3();
-		};
-	}, [generatorData?.id, generatorData?.parentAccount]);
+
+			return () => {
+				if (unsubscribe) unsubscribe();
+				if (unsubscribe2) unsubscribe2();
+				if (unsubscribe3) unsubscribe3();
+			};
+		} catch (error) {
+			console.error("Error setting up generators query:", error);
+		}
+	}, [generatorData?.id, generatorData?.parentAccount, data?.id]);
 
 	useEffect(() => {
 		if (!authLoading && !user) {
@@ -303,12 +330,20 @@ const GeneratorDashboard = () => {
 
 						const today = new Date();
 						const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+						console.log("todayUTC", todayUTC);
 
+						// if (user.uid && generatorData?.transporterId != user?.transporterId) {
+						// 	tempServices = tempServices.filter((service) => service.routeData.transporterId === user.uid);
+						// }
 						setNextService(
 							tempServices
 								.filter((el) => {
 									const isMarkedAsClosed = el.markedAsClosedAt && el.markedAsClosedAt.toDate instanceof Function;
-									if (el.date.toDate() >= todayUTC && el.status !== SERVICE_STATUS.COMPLETE && !isMarkedAsClosed) {
+									if (
+										el.date.toDate().getTime() >= todayUTC.getTime() &&
+										el.status !== SERVICE_STATUS.COMPLETE &&
+										!isMarkedAsClosed
+									) {
 										return true;
 									} else {
 										return false;
@@ -316,30 +351,34 @@ const GeneratorDashboard = () => {
 								})
 								.sort((a, b) => a.date.toDate() - b.date.toDate())
 						);
+						const lastComplet = tempServices
+							.filter((el) => {
+								const isCompleted = el.date.toDate() <= todayUTC && el.status === SERVICE_STATUS.COMPLETE;
 
-						setLastCompleted(
-							tempServices
-								.filter((el) => {
-									if (el.status === SERVICE_STATUS.COMPLETE && el.completedAt) {
-										const completedDate = new Date(el.completedAt.toDate());
-										const completedUTC = new Date(
-											Date.UTC(
-												completedDate.getFullYear(),
-												completedDate.getMonth(),
-												completedDate.getDate(),
-												0,
-												0,
-												0,
-												0
-											)
-										);
-
-										return completedUTC.getTime() <= todayUTC.getTime();
-									}
-									return false;
-								})
-								.sort((a, b) => b.completedAt.toDate() - a.completedAt.toDate())
-						);
+								const isMarkedAsClosed = el.markedAsClosedAt && el.markedAsClosedAt.toDate instanceof Function;
+								return isCompleted || isMarkedAsClosed;
+							})
+							.sort((a, b) => {
+								let aEffectiveDate;
+								if (a.markedAsClosedAt && a.markedAsClosedAt.toDate instanceof Function) {
+									aEffectiveDate = a.markedAsClosedAt.toDate();
+								} else if (a.completedAt?.toDate() && a.completedAt.toDate() > a.date.toDate()) {
+									aEffectiveDate = a.completedAt.toDate();
+								} else {
+									aEffectiveDate = a.date.toDate();
+								}
+								let bEffectiveDate;
+								if (b.markedAsClosedAt && b.markedAsClosedAt.toDate instanceof Function) {
+									bEffectiveDate = b.markedAsClosedAt.toDate();
+								} else if (b.completedAt?.toDate() && b.completedAt.toDate() > b.date.toDate()) {
+									bEffectiveDate = b.completedAt.toDate();
+								} else {
+									bEffectiveDate = b.date.toDate();
+								}
+								return bEffectiveDate - aEffectiveDate;
+							});
+						console.log("lastComplete");
+						setLastCompleted(lastComplet);
 
 						const todayServices = tempServices
 							.filter((el) => {
@@ -417,6 +456,7 @@ const GeneratorDashboard = () => {
 					const routeData = dailyRouteData.data();
 
 					if (routeData.assignedDriverId && routeData.assignedServiceVehicleId) {
+						setDriverId(routeData.assignedDriverId);
 						const routeServices = tservice.filter((s) => s.routeId === routeId);
 						const inProgressService = routeServices.find(
 							(s) =>
@@ -757,6 +797,24 @@ const GeneratorDashboard = () => {
 			setSelectedValue(generatorData?.id || "");
 		}
 	}, [generatorData, childrenData]);
+	useEffect(() => {
+		const fetchGenerators = async () => {
+			if (rootGeneratorIds && Array.isArray(rootGeneratorIds) && rootGeneratorIds.length > 0) {
+				const batchSize = 30;
+				let results = [];
+				for (let i = 0; i < rootGeneratorIds.length; i += batchSize) {
+					const batchIds = rootGeneratorIds.slice(i, i + batchSize);
+					const q = query(collection(db, COLLECTIONS.generators), where("__name__", "in", batchIds));
+					const snapshot = await getDocs(q);
+					results = results.concat(snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id })));
+				}
+				setAllGenerators(results);
+			} else {
+				setAllGenerators([]);
+			}
+		};
+		fetchGenerators();
+	}, [rootGeneratorIds]);
 
 	useEffect(() => {
 		if (!generatorData?.id) return;
@@ -796,10 +854,6 @@ const GeneratorDashboard = () => {
 					});
 					await Promise.all(jobs);
 					tempServices = tempServices.sort((a, b) => a.date.toDate() - b.date.toDate());
-
-					// if (user.uid && generatorData?.transporterId != user.uid) {
-					// 	tempServices = tempServices.filter((service) => service.routeData.transporterId === user.uid);
-					// }
 
 					setAllServices(tempServices);
 				} catch (error) {
@@ -851,22 +905,8 @@ const GeneratorDashboard = () => {
 		return "N/A";
 	};
 
-	function formatUtcDateString(utcDateString) {
-		const date = new Date(utcDateString);
-		const formatter = new Intl.DateTimeFormat("en-US", {
-			weekday: "short",
-			month: "2-digit",
-			day: "2-digit",
-			year: "numeric",
-			timeZone: "UTC",
-		});
-
-		return formatter.format(date);
-	}
 	async function getTransporterById(id) {
-		console.log("id for trans", id);
-
-		const tranRef = doc(db, "transporters", id);
+		const tranRef = doc(db, COLLECTIONS.transporters, id);
 		const result = await getDoc(tranRef);
 
 		if (!result.exists()) {
@@ -884,7 +924,8 @@ const GeneratorDashboard = () => {
 
 		const fetchData = async () => {
 			try {
-				const tranData = await getTransporterById(user?.transporterId);
+				const tranData = await getTransporterById(user.transporterId);
+
 				if (isMounted) {
 					setTransporterData(tranData);
 				}
@@ -894,23 +935,49 @@ const GeneratorDashboard = () => {
 		};
 
 		fetchData();
+
 		return () => {
 			isMounted = false;
 		};
 	}, [user?.transporterId]);
+
+	function formatUtcDateString(utcDateString) {
+		const date = new Date(utcDateString);
+		const formatter = new Intl.DateTimeFormat("en-US", {
+			weekday: "short",
+			month: "2-digit",
+			day: "2-digit",
+			year: "numeric",
+			timeZone: "UTC",
+		});
+
+		return formatter.format(date);
+	}
+
 	if (authLoading || !user || !generatorData) {
 		return <Loader />;
 	}
+
+	const handleChildChange = (e) => {
+		const selectedId = e.target.value;
+		const selectedGen = parentOptions.find((gen) => gen.id === selectedId);
+		if (selectedGen) {
+			setGeneratorData(selectedGen);
+		}
+	};
+
 	const isParentWithChildren = !data?.parentAccount && childrenData && childrenData.length > 0;
+	const parentOptions = allGenerators.filter((gen) => rootGeneratorIds?.includes(gen.id));
 
 	return (
-		<div className="bg-bgDefaultColor px-6 md:px-12 lg:px-20 xl:px-32 py-3 md:py-5 flex flex-col gap-3 md:gap-5">
-			<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5 items-center">
+		<div className="bg-bgDefaultColor px-32 py-5 flex flex-col gap-5 ">
+			{console.log("Generator Data:", allGenerators)}
+			<div className="grid grid-cols-3 gap-5 items-center w-full">
 				<ParentDropdown
-					//  isParent={isparent}
 					generatorData={generatorData}
 					parentGenerator={parentGenerator}
-					// handleChildChange={handleChildChange}
+					parentOptions={parentOptions}
+					handleChildChange={handleChildChange}
 				/>
 
 				<ChildDropdown
@@ -928,13 +995,7 @@ const GeneratorDashboard = () => {
 					isLoadingTracking={isLoadingTracking}
 				/>
 
-				{/* <button className="bg-lightBlue hover:bg-cardTextBlue text-white rounded-full py-3 px-4 shadow-lg transition-all duration-300 flex justify-between items-center space-x-2">
-					<span>Add Service Location</span>
-					<span>
-						<Plus />
-					</span>
-				</button> */}
-				<div className="fixed top-4 right-8 z-50">
+				<div className="flex justify-end items-center">
 					<GeneratorUserAccBtn />
 				</div>
 			</div>
@@ -946,7 +1007,7 @@ const GeneratorDashboard = () => {
 			</div>
 
 			<div className="flex justify-between gap-5">
-				<div className="bg-white p-4 md:p-6 lg:p-8 flex items-center gap-3 md:gap-5 flex-col w-full text-center rounded-xl shadow-md">
+				<div className="bg-white p-10 flex items-center gap-5 flex-col w-full text-center rounded-xl shadow-md">
 					<h1 className="font-bold text-3xl">Service</h1>
 
 					<div className="">
@@ -957,7 +1018,7 @@ const GeneratorDashboard = () => {
 								: "N/A"}
 						</h1>
 					</div>
-                    {console.log("generator data from ui",generatorData)}
+
 					<div className="grid gap-2 w-full max-w-80">
 						<button
 							className="w-full  bg-thatblue hover:bg-blue-500 rounded-full text-white p-3"
@@ -977,7 +1038,7 @@ const GeneratorDashboard = () => {
 						</button>
 					</div>
 
-					<div className="w-full bg-thatblue text-white rounded-xl p-3 md:p-5 grid gap-1 md:gap-2">
+					<div className="w-full bg-thatblue text-white  rounded-xl p-5 grid  gap-2">
 						<h1 className="font-semibold text-center">Service Summary</h1>
 						<hr className="" />
 
@@ -1068,7 +1129,7 @@ const GeneratorDashboard = () => {
 						<div className="grid gap-1">
 							<div className="grid grid-cols-2">
 								<span className="text-left">Billing Address:</span>
-								<span className="text-left">{renderAddress(generatorData.billingAddress)}</span>
+								<span className="text-left">{renderAddress(generatorData?.billingAddress)}</span>
 							</div>
 							<div className="grid grid-cols-2">
 								<span className="text-left">Last Payment:</span>
@@ -1119,7 +1180,7 @@ const GeneratorDashboard = () => {
 							<span className="text-gray-700 col-span-6">Medical Waste & Paper Shredding</span>
 						</div>
 						<div className="grid grid-cols-8 items-center">
-							<div className="w-6 h-6 bg-yellow-500 rounded-full mr-2 col-span-2" />
+							<div className="w-6 h-6 border-yellow-500 border-[3px] mr-2 col-span-2" />
 							<span className="text-gray-700 col-span-6">Holiday (No services on this day)</span>
 						</div>
 						<div className="grid grid-cols-8 items-center">
@@ -1230,7 +1291,7 @@ const GeneratorDashboard = () => {
 				</div>
 			</div>
 
-			<div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-5">
+			<div className="w-full grid grid-cols-2 gap-5">
 				<div className="bg-white p-3 rounded-cardRadii shadow-md flex-1 flex flex-col">
 					<h2 className="font-bold text-lg ml-1 pb-2">Service Calendar</h2>
 					<CalendarWithTimeSlots allServices={allServices} wholeCalender={true} />
@@ -1254,6 +1315,7 @@ const GeneratorDashboard = () => {
 								generatorData={generatorData}
 								randomCoordinates={randomCoordinates}
 								showPointer={true}
+								driverId={driverId}
 							/>
 						) : (
 							<p>Generator Data not flow</p>
@@ -1261,6 +1323,7 @@ const GeneratorDashboard = () => {
 					</AzureMapsProvider>
 				</div>
 			</div>
+
 			<GeneratorDetailsForm
 				billingAddress={generatorData.billingAddress}
 				serviceAddress={generatorData.serviceAddress}
@@ -1269,7 +1332,6 @@ const GeneratorDashboard = () => {
 					contactFormRef.current.scrollIntoView({ behavior: "smooth" });
 				}}
 			/>
-
 			<GeneratorOfficeHours workingHours={generatorData?.workingHours} />
 			<div ref={contactFormRef}>
 				<ContactUsForm transporterData={transporterData} />
