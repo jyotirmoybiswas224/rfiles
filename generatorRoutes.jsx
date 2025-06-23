@@ -1055,39 +1055,41 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 							</button>
 						</>
 					)}
-					{isReadOnly && sentSubcontractorRequests[currentSSRIndex]?.subcontractorId !== user?.uid && (
-						<>
-							<button
-								type="button"
-								className={`rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition ${
-									currentSsr?.status == "TERMINATEACCEPTED"
-										? "bg-primary text-white rounded-full px-4 py-1 ml-2 hover:bg-primary/90"
-										: ""
-								}`}
-								onClick={() => {
-									setCurrentSSRIndex(currentSSRIndex);
-									setSelectedSSR(currentSsr);
-									document.getElementById(`delete-SSR`).showModal();
-								}}
-								disabled={currentSsr?.status == "TERMINATED"}
-							>
-								{currentSsr?.status == SERVICE_STATUS.ACCEPTED ? "Termination Request Form" : "Cancel"}
-							</button>
-							{currentSsr?.status === SERVICE_STATUS.PENDING && (
+					{isReadOnly &&
+						sentSubcontractorRequests[currentSSRIndex]?.subcontractorId !== user?.uid &&
+						sentSubcontractorRequests[currentSSRIndex]?.status !== "TERMINATEACCEPTED" && (
+							<>
 								<button
 									type="button"
-									className="bg-primary text-white rounded-full px-4 py-1 ml-2 hover:bg-primary/90"
+									className={`rounded-full px-4 py-2 text-sm border border-gray-500 hover:bg-gray-100 transition ${
+										currentSsr?.status == "TERMINATEACCEPTED"
+											? "bg-primary text-white rounded-full px-4 py-1 ml-2 hover:bg-primary/90"
+											: ""
+									}`}
 									onClick={() => {
-										setToReassign(currentSsr);
-										setIsReassignModalOpen(true);
-										setShowAvailableSubCont(false);
+										setCurrentSSRIndex(currentSSRIndex);
+										setSelectedSSR(currentSsr);
+										document.getElementById(`delete-SSR`).showModal();
 									}}
+									disabled={currentSsr?.status == "TERMINATED"}
 								>
-									Reassign
+									{currentSsr?.status == SERVICE_STATUS.ACCEPTED ? "Termination Request Form" : "Cancel"}
 								</button>
-							)}
-						</>
-					)}
+								{currentSsr?.status === SERVICE_STATUS.PENDING && (
+									<button
+										type="button"
+										className="bg-primary text-white rounded-full px-4 py-1 ml-2 hover:bg-primary/90"
+										onClick={() => {
+											setToReassign(currentSsr);
+											setIsReassignModalOpen(true);
+											setShowAvailableSubCont(false);
+										}}
+									>
+										Reassign
+									</button>
+								)}
+							</>
+						)}
 				</div>
 			);
 		}
@@ -1293,10 +1295,12 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 			const batch = writeBatch(db);
 			const currentTransporterRef = doc(db, COLLECTIONS.transporters, user?.uid);
 			const newSubContractorRef = doc(db, COLLECTIONS.transporters, newSubcontractorId);
+			const oldSubContractorRef = doc(db, COLLECTIONS.transporters, ssr.subcontractorId);
 
-			const [currentTransporterDoc, newSubContractorDoc] = await Promise.all([
+			const [currentTransporterDoc, newSubContractorDoc, oldSubContractorDoc] = await Promise.all([
 				getDoc(currentTransporterRef),
 				getDoc(newSubContractorRef),
+				getDoc(oldSubContractorRef),
 			]);
 
 			if (!currentTransporterDoc.exists() || !newSubContractorDoc.exists()) {
@@ -1306,44 +1310,56 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 
 			let currTransporterSharedGens = currentTransporterDoc.data()?.sharedGenerators ?? {};
 			let newSubContractorSharedGens = newSubContractorDoc.data()?.sharedGenerators ?? {};
+			let oldSubContractorSharedGens = oldSubContractorDoc.exists()
+				? oldSubContractorDoc.data()?.sharedGenerators ?? {}
+				: {};
 
-			const newSsrId = Date.now().toString();
 			const transporterName = currentTransporterDoc.data().companyName || "Unknown";
 			const subContractorName = newSubContractorDoc.data().companyName || "Unknown";
 
-			const newSSR = {
-				genId: ssr.genId,
-				serviceFrequency: ssr.serviceFrequency,
-				weekdays: ssr.weekdays || [],
-				serviceType: ssr.serviceType,
-				requestedStartDate: ssr.requestedStartDate,
-				serviceDuration: ssr.serviceDuration,
-				expectedItemsOrServices: ssr.expectedItemsOrServices || [],
-				serviceNote: ssr.serviceNote || "",
+			// Remove the SSR from the old subcontractor's toMe array
+			if (oldSubContractorDoc.exists()) {
+				const updatedToMe = (oldSubContractorSharedGens.toMe || []).filter((request) => request.ssrId !== ssr.ssrId);
 
-				status: SERVICE_STATUS.PENDING,
-				timeStamp: new Date(),
-				createdAt: new Date().toISOString(),
+				batch.update(oldSubContractorRef, {
+					sharedGenerators: {
+						...oldSubContractorSharedGens,
+						toMe: updatedToMe,
+					},
+				});
+			}
+
+			// Update the existing SSR with the new subcontractor info
+			const updatedSSR = {
+				...ssr,
 				subcontractorId: newSubcontractorId,
 				subContractorName,
-				transporterId: user.uid,
-				transporterName,
-				ssrId: newSsrId,
-				establishedDate: new Date().toISOString(),
+				status: SERVICE_STATUS.PENDING, // Reset to pending for the new subcontractor
+				timeStamp: new Date(),
+				reassignedAt: new Date().toISOString(),
 			};
+
+			// Update the transporter's fromMe array with the updated SSR
+			const updatedFromMe = (currTransporterSharedGens.fromMe || []).map((request) =>
+				request.ssrId === ssr.ssrId ? updatedSSR : request
+			);
+
 			batch.update(currentTransporterRef, {
 				sharedGenerators: {
 					...currTransporterSharedGens,
-					fromMe: [...(currTransporterSharedGens.fromMe || []), newSSR],
-				},
-			});
-			batch.update(newSubContractorRef, {
-				sharedGenerators: {
-					...newSubContractorSharedGens,
-					toMe: [...(newSubContractorSharedGens.toMe || []), newSSR],
+					fromMe: updatedFromMe,
 				},
 			});
 
+			// Add the updated SSR to the new subcontractor's toMe array
+			batch.update(newSubContractorRef, {
+				sharedGenerators: {
+					...newSubContractorSharedGens,
+					toMe: [...(newSubContractorSharedGens.toMe || []), updatedSSR],
+				},
+			});
+
+			// Create notification for the new subcontractor
 			const subcontractorNotificationRef = doc(db, "notifications", newSubcontractorId);
 			const notificationDocSnapshot = await getDoc(subcontractorNotificationRef);
 
@@ -1355,9 +1371,9 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 
 			const newNotification = {
 				id: Date.now().toString(),
-				topic: "New SSR Request",
-				type: "SSR_Request",
-				message: `A new Subcontractor Service Request has been received from ${transporterName} for ${generatorData.generatorName}`,
+				topic: "Reassigned SSR Request",
+				type: "SSR_Reassigned",
+				message: `A Service Request for ${generatorData.generatorName} has been reassigned to you from ${transporterName}`,
 				read: false,
 				timeStamp: new Date(),
 			};
@@ -1539,7 +1555,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 			{activeSentSSRs.length > 0 && generatorData?.transporterId !== user?.uid && (
 				<div>
 					<div className="flex items-center gap-4 border-b border-[#CCCCCC] ">
-						<h6 className="font-medium py-2 text-lg" >Subcontractor Service Requests (SSR)</h6>
+						<h6 className="font-medium py-2 text-lg">Subcontractor Service Requests (SSR)</h6>
 						<RouteAssignmentOctoInfoPanel />
 					</div>
 					{activeSentSSRs.map((ssr, index) => (
@@ -2051,9 +2067,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 				{activeSentSSRs.length > 0 && generatorData?.transporterId === user?.uid && (
 					<div>
 						<div className="flex items-center gap-4 border-b border-[#CCCCCC]">
-							<h6 className="font-medium py-2 text-lg   ">
-								Subcontractor Service Requests (SSR)
-							</h6>
+							<h6 className="font-medium py-2 text-lg   ">Subcontractor Service Requests (SSR)</h6>
 							<RouteAssignmentOctoInfoPanel />
 						</div>
 						{activeSentSSRs.map((ssr, index) => (
@@ -2232,7 +2246,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 									<button
 										onClick={() => {
 											setShowAvailableSubCont(false);
-											setIsReassignModalOpen(true);
+											setIsReassignModalOpen(false);
 										}}
 										className="bg-[#F3F3F3] rounded-full w-24 p-1 px-4"
 									>
@@ -2249,7 +2263,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 										}`}
 										disabled={!selectedSubAssignee || isReassigning}
 									>
-										{isReassigning ? "Re-assigning..." : "Re-assign"}
+										{isReassigning ? "Reassigning..." : "Reassign"}
 									</button>
 								</div>
 							</div>
@@ -2260,7 +2274,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 
 			<div className="grid items-center justify-center relative">
 				{generatorData.transporterId == user?.uid && renderSSRButton()}
-				<div className="ml-auto absolute top-0 right-0">{renderAddMoreServiceButtons()}</div>
+				<div className="ml-auto absolute top-0 right-0">{isReadOnly&&activeSentSSRs.filter((el)=> el.status==SERVICE_STATUS.ACCEPTED).length>0&&renderAddMoreServiceButtons()}</div>
 			</div>
 
 			<div className="py-5">
