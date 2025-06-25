@@ -79,6 +79,7 @@ import SsrFormComponent from "./components/SSRFormComponent";
 import { useSSRManagement } from "../../../../../../../../utils/useSsrRequests";
 import MemoizedMapSection from "./components/MemoizedMapSection";
 import Explainer from "../../../../../../../../components/UI/Explainer";
+import { data } from "autoprefixer";
 
 const defaultOption = {
 	serviceType: "",
@@ -182,6 +183,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 	const [selectedSubAssignee, setSelectedSubAssignee] = useState("");
 	const [toReassign, setToReassign] = useState(null);
 	const [isReassigning, setIsReassigning] = useState(false);
+	const [notifyAllUsers, setNotifyAllUsers] = useState(false);
 
 	useEffect(() => {
 		if (!generatorData?.id) return;
@@ -198,6 +200,10 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 
 	useEffect(() => {
 		if (!liveGeneratorData) return;
+		if (liveGeneratorData?.generatorStatus == "ADMINISTRATIVE_ACCOUNT") {
+			document.getElementById(`generator_administrative_account`).showModal();
+			return;
+		}
 		if (
 			!liveGeneratorData?.serviceAddCoordinates ||
 			!liveGeneratorData?.serviceAddCoordinates.lat ||
@@ -847,6 +853,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 				contractorId: generatorData?.transporterId,
 				subcontractorId: user?.uid,
 				createdAt: serverTimestamp(),
+				doNotifyStakeholders: notifyAllUsers,
 			};
 			console.log("Data to save:", data);
 			delete data?.isUpdating;
@@ -869,7 +876,15 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 				});
 			}
 			await batch.commit();
-			showSuccessToastMessage("Service created successfully!. Changes will reflect shortly.");
+			if (notifyAllUsers) {
+				showSuccessToastMessage(
+					"Service created successfully! All the stakeholders will not be notified. Changes will reflect shortly."
+				);
+			} else {
+				showSuccessToastMessage(
+					"Service created successfully! All the stakeholders will be notified. Changes will reflect shortly."
+				);
+			}
 			updateGeneratorData();
 			fetchServiceSchedules();
 		} catch (error) {
@@ -1057,7 +1072,8 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 					)}
 					{isReadOnly &&
 						sentSubcontractorRequests[currentSSRIndex]?.subcontractorId !== user?.uid &&
-						sentSubcontractorRequests[currentSSRIndex]?.status !== "TERMINATEACCEPTED" && (
+						sentSubcontractorRequests[currentSSRIndex]?.status !== "TERMINATEACCEPTED" &&
+						sentSubcontractorRequests[currentSSRIndex]?.status !== "TERMINATED" && (
 							<>
 								<button
 									type="button"
@@ -1269,7 +1285,8 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 				sentSubcontractorRequests[currentSSRIndex],
 				cancelReason,
 				terminationDate,
-				terminationNote
+				terminationNote,
+				generatorData?.generatorName
 			).then((success) => {
 				if (success) {
 					document.getElementById(`delete-SSR`).close();
@@ -1465,6 +1482,32 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 							<p>
 								Generator profile is not marked as contracted. Please mark the generator as contracted to access this
 								page.
+							</p>
+						</div>
+
+						<div className="flex justify-center w-full">
+							<button
+								type="button"
+								className="btn btn-primary btn-sm"
+								onClick={() => {
+									navigate(`/admin/generators/${generatorData.id}/generator-information`);
+								}}
+							>
+								Go Back to Generator Profile
+							</button>
+						</div>
+					</form>
+				</div>
+			</dialog>
+
+			<dialog id={`generator_administrative_account`} className="modal">
+				<div className="modal-box">
+					<form method="dialog">
+						<h3 className="font-bold text-lg">Generator Profile Marked As Administrative Account </h3>
+						<div className="overflow-visible z-10 flex flex-col py-5">
+							<p>
+								Generator profile is marked as administrative account. You can not assign routes for the administrative
+								account.
 							</p>
 						</div>
 
@@ -1701,6 +1744,21 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 								{errors.serviceSchedules?.[index]?.anchorDate && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].anchorDate.message}</p>
 								)}
+								<div className="flex items-center mt-2">
+									<input
+										type="checkbox"
+										id={`doNotifyAllUsers-${index}`}
+										checked={watchServiceSchedules[index]?.doNotifyAllUsers || false}
+										onChange={(e) => {
+											setValue(`serviceSchedules.${index}.doNotifyAllUsers`, e.target.checked, { shouldValidate: false });
+											setNotifyAllUsers(e.target.checked);
+										}}
+										className="mr-2"
+									/>
+									<label htmlFor={`doNotifyAllUsers-${index}`} className="truncate text-inputLabel font-normal">
+										Do not notify stakeholder of this change in service{" "}
+									</label>
+								</div>
 								{watchServiceSchedules[index]?.id && (
 									<div className="flex items-center justify-between my-4">
 										<label htmlFor={`establishedDate-${index}`} className="truncate text-inputLabel font-normal">
@@ -1743,44 +1801,42 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 									name={`serviceSchedules.${index}.serviceType`}
 									control={control}
 									rules={{ required: "Service Type is required." }}
-									render={({ field: { onChange, value } }) => (
-										<Dropdown
-											label="Service Type"
-											id={`service-input-${index}`}
-											options={serviceTypes.map((item) => {
-												if (item.value === "HAZARDOUS_WASTE") {
-													return {
-														label: "Hazardous Waste",
-														value: null,
-														isDisabled: true,
-													};
-												}
-												return {
+									render={({ field: { onChange, value } }) => {
+										const selectedRoute = allRoutesOptions.find((r) => r.id === watchServiceSchedules[index]?.routeId);
+										const allowedTypes = selectedRoute?.type || [];
+										const filteredServiceTypes = serviceTypes.filter((st) => allowedTypes.includes(st.value));
+										return (
+											<Dropdown
+												label="Service Type"
+												id={`service-input-${index}`}
+												options={filteredServiceTypes.map((item) => ({
 													label: item.label,
 													value: item.value,
-												};
-											})}
-											value={value}
-											onChange={(e) => {
-												onChange(e);
-												trigger(`serviceSchedules.${index}.serviceType`, { shouldFocus: true });
-												if (
-													!(
-														(e === SERVICE_TYPES.PAPER_SHREDDING && value === SERVICE_TYPES.PAPER_SHREDDING) ||
-														(e === SERVICE_TYPES.PAPER_SHREDDING && value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
-														(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && value === SERVICE_TYPES.PAPER_SHREDDING) ||
-														(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
-															value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING)
-													)
-												) {
-													setValue(`serviceSchedules.${index}.expectedItemOrService`, []);
-												}
-											}}
-											isRequired={true}
-											disabledBgColor="white"
-											disabledTextColor="gray-300"
-										/>
-									)}
+												}))}
+												value={value}
+												onChange={(e) => {
+													onChange(e);
+													trigger(`serviceSchedules.${index}.serviceType`, { shouldFocus: true });
+													if (
+														!(
+															(e === SERVICE_TYPES.PAPER_SHREDDING && value === SERVICE_TYPES.PAPER_SHREDDING) ||
+															(e === SERVICE_TYPES.PAPER_SHREDDING &&
+																value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
+															(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
+																value === SERVICE_TYPES.PAPER_SHREDDING) ||
+															(e === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING &&
+																value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING)
+														)
+													) {
+														setValue(`serviceSchedules.${index}.expectedItemOrService`, []);
+													}
+												}}
+												isRequired={true}
+												disabledBgColor="white"
+												disabledTextColor="gray-300"
+											/>
+										);
+									}}
 								/>
 								{errors.serviceSchedules?.[index]?.serviceType && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].serviceType.message}</p>
@@ -1999,7 +2055,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 									) : formValues?.serviceSchedules[index]?.id ? (
 										"Update"
 									) : (
-										"Save"
+										"Add to Route"
 									)}
 								</button>
 							</div>
@@ -2271,16 +2327,53 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 					</div>
 				</div>
 			)}
-
+			{console.log(
+				"Accepted ssr",
+				activeSentSSRs.filter((el) => el.status == SERVICE_STATUS.ACCEPTED || el.status == "TERMINATED").length
+			)}
 			<div className="grid items-center justify-center relative">
 				{generatorData.transporterId == user?.uid && renderSSRButton()}
-				<div className="ml-auto absolute top-0 right-0">{isReadOnly&&activeSentSSRs.filter((el)=> el.status==SERVICE_STATUS.ACCEPTED).length>0&&renderAddMoreServiceButtons()}</div>
+				<div className="ml-auto absolute top-0 right-0">
+					{(activeSentSSRs.filter((el) => el.status == SERVICE_STATUS.ACCEPTED || el.status == "TERMINATED").length >
+						0 ||
+						!isReadOnly) &&
+						renderAddMoreServiceButtons()}
+				</div>
 			</div>
 
 			<div className="py-5">
 				<div className="flex flex-col gap-2">
 					<div className="w-full grid gap-3">
-						<h6 className="font-medium py-2 text-lg border-b border-[#CCCCCC]">Reminders/Notifications</h6>
+						<div className="flex gap-10 border-b border-[#CCCCCC]">
+						<h6 className="font-medium py-2 text-lg ">Reminders/Notifications</h6>
+													<label htmlFor="reminder-notification" className="flex items-center text-gray-500 gap-5">
+								<input
+									type="checkbox"
+									name=""
+									id="reminder-notification"
+									className="w-4 h-4 bg-white"
+									defaultChecked={generatorData?.notifiPref24Hours}
+									onChange={(e) => {
+										if (e.currentTarget?.checked) {
+											try {
+												updateDoc(doc(db, COLLECTIONS.generators, generatorData?.id), { sendToStakeHolder: true });
+											} catch (error) {
+												console.log(error);
+												showInternalServerErrorToastMessage();
+											}
+										} else {
+											try {
+												updateDoc(doc(db, COLLECTIONS.generators, generatorData?.id), { sendToStakeHolder: false });
+											} catch (error) {
+												console.log(error);
+												showInternalServerErrorToastMessage();
+											}
+										}
+									}}
+								/>
+								<p>Send to Stake Holders</p>
+							</label>
+							</div>
 						<div className="flex flex-col sm:flex-row pt-1 items-center gap-6">
 							<label className="text-cardTextGray">Service Day Notifications</label>
 						</div>
