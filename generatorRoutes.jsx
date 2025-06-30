@@ -1,3 +1,4 @@
+
 import PropTypes from "prop-types";
 import React, { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
@@ -184,6 +185,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 	const [toReassign, setToReassign] = useState(null);
 	const [isReassigning, setIsReassigning] = useState(false);
 	const [notifyAllUsers, setNotifyAllUsers] = useState(false);
+	const [serviceSettingData, setServiceSettingData] = useState(null);
 
 	useEffect(() => {
 		if (!generatorData?.id) return;
@@ -325,6 +327,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 		let unsubscribe = onSnapshot(doc(db, COLLECTIONS.serviceSettings, user.uid), (doc) => {
 			if (doc.exists()) {
 				const data = doc.data();
+				setServiceSettingData(data);
 				if (data?.serviceFrequencies?.length > 0) {
 					const tempFrequencyOptions = [];
 					data?.serviceFrequencies?.forEach((item) => {
@@ -840,7 +843,9 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 		append({
 			...defaultOption,
 			isSetUpService: true,
+			doNotifyAllUsers: false,
 		});
+		setNotifyAllUsers(false);
 	};
 
 	const handleSave = async (index) => {
@@ -1578,6 +1583,46 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 					</form>
 				</div>
 			</dialog>
+			<dialog id="notify-stakeholders-confirmation" className="modal">
+				<div className="modal-box">
+					<form method="dialog">
+						<h3 className="font-bold text-lg">Are you sure ?</h3>
+
+						<div className="overflow-visible z-10 flex flex-col py-5">
+							<p>Are you sure you want to disable notifications to stakeholders for this service?</p>
+						</div>
+
+						<div className="flex justify-between gap-4 mt-4">
+							<button
+								type="button"
+								className="btn btn-error btn-sm"
+								onClick={() => {
+									const currentIndex = parseInt(
+										document.getElementById("notify-stakeholders-confirmation").dataset.index
+									);
+									setValue(`serviceSchedules.${currentIndex}.doNotifyAllUsers`, false, { shouldValidate: false });
+									document.getElementById("notify-stakeholders-confirmation").close();
+								}}
+							>
+								No, Keep Notifications
+							</button>
+							<button
+								type="button"
+								className="btn btn-primary btn-sm"
+								onClick={() => {
+									const currentIndex = parseInt(
+										document.getElementById("notify-stakeholders-confirmation").dataset.index
+									);
+									setValue(`serviceSchedules.${currentIndex}.doNotifyAllUsers`, true, { shouldValidate: false });
+									document.getElementById("notify-stakeholders-confirmation").close();
+								}}
+							>
+								Yes, Disable Notifications
+							</button>
+						</div>
+					</form>
+				</div>
+			</dialog>
 			<GeneratorInfoHeader
 				generatorData={generatorData ?? {}}
 				user={user}
@@ -1744,21 +1789,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 								{errors.serviceSchedules?.[index]?.anchorDate && (
 									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules[index].anchorDate.message}</p>
 								)}
-								<div className="flex items-center mt-2">
-									<input
-										type="checkbox"
-										id={`doNotifyAllUsers-${index}`}
-										checked={watchServiceSchedules[index]?.doNotifyAllUsers || false}
-										onChange={(e) => {
-											setValue(`serviceSchedules.${index}.doNotifyAllUsers`, e.target.checked, { shouldValidate: false });
-											setNotifyAllUsers(e.target.checked);
-										}}
-										className="mr-2"
-									/>
-									<label htmlFor={`doNotifyAllUsers-${index}`} className="truncate text-inputLabel font-normal">
-										Do not notify stakeholder of this change in service{" "}
-									</label>
-								</div>
+
 								{watchServiceSchedules[index]?.id && (
 									<div className="flex items-center justify-between my-4">
 										<label htmlFor={`establishedDate-${index}`} className="truncate text-inputLabel font-normal">
@@ -1790,11 +1821,31 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 													};
 
 													return getFormattedDate(date);
-												})()}
+												})}
 											</div>
 										</div>
 									</div>
 								)}
+								 <div className="flex items-center mt-2 mb-2">
+									<input
+										type="checkbox"
+										id={`doNotifyAllUsers-${index}`}
+										checked={watchServiceSchedules[index]?.doNotifyAllUsers || false}
+										onChange={(e) => {
+											if (e.target.checked) {
+												const dialog = document.getElementById("notify-stakeholders-confirmation");
+												dialog.dataset.index = index.toString();
+												dialog.showModal();
+											} else {
+												setValue(`serviceSchedules.${index}.doNotifyAllUsers`, false, { shouldValidate: false });
+											}
+										}}
+										className="mr-2"
+									/>
+									<label htmlFor={`doNotifyAllUsers-${index}`} className="truncate text-inputLabel font-normal">
+										Do not notify stakeholder of this change in service{" "}
+									</label>
+								</div>
 							</div>
 							<div className="w-1/2 ">
 								<Controller
@@ -2224,7 +2275,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 								</>
 							)}
 							<p>{`Enter Note for ${
-								selectedSSR?.status === SERVICE_STATUS.ACCEPTED ? "termination" : "cancelelation"
+								selectedSSR?.status === SERVICE_STATUS.ACCEPTED ? "termination" : "cancelation"
 							}  *`}</p>
 
 							<textarea
@@ -2345,14 +2396,14 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 				<div className="flex flex-col gap-2">
 					<div className="w-full grid gap-3">
 						<div className="flex gap-10 border-b border-[#CCCCCC]">
-						<h6 className="font-medium py-2 text-lg ">Reminders/Notifications</h6>
-													<label htmlFor="reminder-notification" className="flex items-center text-gray-500 gap-5">
+							<h6 className="font-medium py-2 text-lg ">Reminders/Notifications</h6>
+							<label htmlFor="reminder-notification" className="flex items-center text-gray-500 gap-5">
 								<input
 									type="checkbox"
 									name=""
 									id="reminder-notification"
 									className="w-4 h-4 bg-white"
-									defaultChecked={generatorData?.notifiPref24Hours}
+									defaultChecked={generatorData?.sendToStakeHolder}
 									onChange={(e) => {
 										if (e.currentTarget?.checked) {
 											try {
@@ -2371,9 +2422,9 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 										}
 									}}
 								/>
-								<p>Send to Stake Holders</p>
+								<p>Send to Stakeholders</p>
 							</label>
-							</div>
+						</div>
 						<div className="flex flex-col sm:flex-row pt-1 items-center gap-6">
 							<label className="text-cardTextGray">Service Day Notifications</label>
 						</div>
@@ -2384,7 +2435,11 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 									name=""
 									id="24-hour-notice"
 									className="w-4 h-4 bg-white"
-									defaultChecked={generatorData?.notifiPref24Hours}
+									defaultChecked={
+										generatorData?.notifiPref24Hours
+											? generatorData?.notifiPref24Hours
+											: serviceSettingData?.serviceDayNotification?.notificationTiming?.sameDayServiceReminder
+									}
 									onChange={(e) => {
 										if (e.currentTarget?.checked) {
 											try {
@@ -2406,12 +2461,17 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 								<p>24 Hour Advance Notice</p>
 							</label>
 							<label htmlFor="same-day-notice" className="flex items-center text-gray-500 gap-5">
+								{console.log("serviceSettingsDta", serviceSettingData)}
 								<input
 									type="checkbox"
 									name=""
 									id="same-day-notice"
 									className="w-4 h-4 bg-white"
-									defaultChecked={generatorData?.notifiPrefServiceDay}
+									defaultChecked={
+										generatorData?.notifiPrefServiceDay
+											? generatorData?.notifiPrefServiceDay
+											: serviceSettingData?.serviceDayNotification?.notificationTiming?.advanceServiceReminder
+									}
 									onChange={(e) => {
 										if (e.currentTarget.checked) {
 											try {
