@@ -1,0 +1,767 @@
+import { useState, useEffect, useCallback } from "react";
+import {
+	addDoc,
+	collection,
+	doc,
+	getDoc,
+	getDocs,
+	onSnapshot,
+	query,
+	serverTimestamp,
+	setDoc,
+	updateDoc,
+	where,
+	writeBatch,
+} from "firebase/firestore";
+import { COLLECTIONS, db } from "../config/firebase";
+import { showErrorToastMessage, showLoadingToastMessage, showSuccessToastMessage } from "./helpers";
+import { toast } from "react-toastify";
+import { frequencyPrimaryOptions, frequencySecondaryOptions, SERVICE_STATUS } from "./constants";
+import { getGeneratorById } from "./firebaseOperations";
+
+export const useContainers = (initialTransporterId) => {
+	const [itemsOptions, setItemsOptions] = useState([]);
+	const [itemsMap, setItemsMap] = useState({});
+	const [subContractorContainers, setSubContractorContainers] = useState([]);
+	const [isLoading, setIsLoading] = useState(true);
+
+	const fetchContainers = useCallback(async (transporterId) => {
+		if (!transporterId) {
+			console.log("No transporter ID provided");
+			return [];
+		}
+
+		try {
+			return new Promise((resolve, reject) => {
+				const unsubscribe = onSnapshot(
+					collection(db, "priceBooks", transporterId, "default", "services", "containers"),
+					(snap) => {
+						let tempOptions = [];
+						let tempMap = {};
+
+						if (snap.docs.length) {
+							snap.docs.forEach((el) => {
+								tempOptions.push({
+									label: el.data()?.masterItemName ?? "--",
+									value: el.id,
+									subWasteType: el.data()?.subWasteType,
+								});
+								tempMap[el.id] = el.data()?.masterItemName ?? "--";
+							});
+
+							setItemsMap((prevMap) => ({ ...prevMap, ...tempMap }));
+						} else {
+							console.log(`No containers found for transporter: ${transporterId}`);
+						}
+						unsubscribe();
+						resolve(tempOptions);
+					},
+					(error) => {
+						console.error("Error fetching containers:", error);
+						unsubscribe();
+						reject(error);
+					}
+				);
+			});
+		} catch (error) {
+			console.error("Error setting up container listener:", error);
+			return [];
+		}
+	}, []);
+
+	const handleSubcontractorSelected = useCallback(
+		async (subcontractorId) => {
+			if (!subcontractorId) {
+				setSubContractorContainers([]);
+				return;
+			}
+
+			try {
+				const containers = await fetchContainers(subcontractorId);
+				setSubContractorContainers(containers);
+			} catch (error) {
+				console.error("Failed to fetch subcontractor containers:", error);
+				setSubContractorContainers([]);
+			}
+		},
+		[fetchContainers]
+	);
+
+	useEffect(() => {
+		if (initialTransporterId) {
+			setIsLoading(true);
+			const loadTransporterContainers = async () => {
+				try {
+					const containers = await fetchContainers(initialTransporterId);
+					setItemsOptions(containers);
+					setIsLoading(false);
+				} catch (error) {
+					console.error("Failed to load initial containers:", error);
+					setIsLoading(false);
+				}
+			};
+
+			loadTransporterContainers();
+		}
+	}, [initialTransporterId, fetchContainers]);
+
+	return {
+		itemsOptions,
+		itemsMap,
+		subContractorContainers,
+		isLoading,
+		fetchContainers,
+		handleSubcontractorSelected,
+	};
+};
+
+export const useSubcontractors = (userId) => {
+	const [subContractorData, setSubContractorData] = useState([]);
+	const [isLoading, setIsLoading] = useState(true);
+	const [isOctoMarketUser, setIsOctoMarketUser] = useState(false);
+	const [subcontractorServiveFrequencyOptions, setSubcontractorServiceFrequencyOptions] = useState([
+		...frequencyPrimaryOptions,
+		...frequencySecondaryOptions,
+	]);
+
+	function getServiceFrequencyForSubcontractor(subcontractorId) {
+		console.log("Getting service frequencies for subcontractor:", subcontractorId);
+
+		setSubcontractorServiceFrequencyOptions([...frequencyPrimaryOptions, ...frequencySecondaryOptions]);
+
+		if (!subcontractorId) return () => {};
+
+		const unsubscribe = onSnapshot(doc(db, COLLECTIONS.serviceSettings, subcontractorId), (docSnapshot) => {
+			if (docSnapshot.exists()) {
+				const data = docSnapshot.data();
+
+				if (data?.serviceFrequencies?.length > 0) {
+					const allOptions = [...frequencyPrimaryOptions, ...frequencySecondaryOptions];
+					const tempFrequencyOptions = [];
+
+					data.serviceFrequencies.forEach((item) => {
+						const frequency = allOptions.find((option) => option.value === item);
+						if (frequency) {
+							tempFrequencyOptions.push({ ...frequency });
+						}
+					});
+
+					console.log("New frequency options:", tempFrequencyOptions);
+					setTimeout(() => {
+						setSubcontractorServiceFrequencyOptions([...tempFrequencyOptions]);
+					}, 0);
+				}
+			}
+		});
+
+		return unsubscribe;
+	}
+
+	const formatAddress = (transporter) => {
+		let formattedAdd = "";
+		transporter.billingAddress?.street?.trim()?.length
+			? (formattedAdd += transporter.billingAddress?.street)
+			: (formattedAdd = "");
+		transporter.billingAddress?.suite?.trim()?.length && formattedAdd?.length
+			? (formattedAdd += `, ${transporter.billingAddress?.suite}`)
+			: (formattedAdd += transporter.billingAddress?.suite ?? "");
+		transporter.billingAddress?.city?.trim()?.length && formattedAdd?.length
+			? (formattedAdd += `, ${transporter.billingAddress?.city}`)
+			: (formattedAdd += transporter.billingAddress?.city ?? "");
+		transporter.billingAddress?.state?.trim()?.length && formattedAdd?.length
+			? (formattedAdd += `, ${transporter.billingAddress?.state}`)
+			: (formattedAdd += transporter.billingAddress?.state ?? "");
+		transporter.billingAddress?.zipCode?.trim()?.length && formattedAdd?.length
+			? (formattedAdd += ` ${transporter.billingAddress?.zipCode}`)
+			: (formattedAdd += transporter.billingAddress?.zipCode ?? "");
+
+		return formattedAdd.length ? formattedAdd : "--";
+	};
+
+	const fetchContractorData = useCallback(async () => {
+		if (!userId) {
+			setIsLoading(false);
+			return [];
+		}
+
+		setIsLoading(true);
+		try {
+			const transporterDoc = await getDoc(doc(db, COLLECTIONS.transporters, userId));
+			const transporterMarketDoc = await getDoc(doc(db, COLLECTIONS.octoMarketUsers, userId));
+
+			if (!transporterDoc.exists() || !transporterMarketDoc.exists()) {
+				console.log("No such transporter!");
+				setIsLoading(false);
+				return [];
+			}
+
+			setIsOctoMarketUser(true);
+
+			const data = transporterDoc.data();
+			const transporterMarketData = transporterMarketDoc.data();
+
+			if (!transporterMarketData) {
+				setIsLoading(false);
+				return [];
+			}
+
+			const contractorRelationships = transporterMarketData.connections || {};
+			const acceptedRelationships = Object.entries(contractorRelationships).filter(
+				([_, relationship]) => relationship.status === "accepted"
+			);
+
+			const contractorPromises = acceptedRelationships.map(async ([contractorId, relationship]) => {
+				const contractorDoc = await getDoc(doc(db, COLLECTIONS.transporters, contractorId));
+
+				if (!contractorDoc.exists()) return null;
+
+				const contractorData = contractorDoc.data();
+				return {
+					id: contractorId,
+					contractorDocid: contractorDoc.id,
+					contractorName: contractorData.companyDisplayName ?? "--",
+					address: formatAddress(contractorData),
+					generalEmail: contractorData.generalEmail?.length > 0 ? contractorData.generalEmail : "--",
+					phoneNumber: contractorData.phoneNumber ?? "--",
+					website: contractorData.website?.length ? contractorData.website : "--",
+					sharedGenerators: contractorData.allGens?.length ?? 0,
+					startDate: relationship.startDate,
+					status: relationship.status,
+					transporterOctoId: contractorData.transporterOctoId,
+				};
+			});
+
+			const contractors = await Promise.all(contractorPromises);
+			const filteredContractors = contractors.filter(Boolean);
+			setSubContractorData(filteredContractors);
+			setIsLoading(false);
+			return filteredContractors;
+		} catch (error) {
+			console.error("Error fetching contractor data:", error);
+			setIsLoading(false);
+			return [];
+		}
+	}, [userId]);
+
+	useEffect(() => {
+		if (userId) {
+			fetchContractorData();
+		}
+	}, [userId, fetchContractorData]);
+
+	return {
+		subContractorData,
+		isLoading,
+		isOctoMarketUser,
+		fetchContractorData,
+		getServiceFrequencyForSubcontractor,
+		subcontractorServiveFrequencyOptions,
+		setSubcontractorServiceFrequencyOptions,
+	};
+};
+
+export const useSsrRequests = (userId, generatorId) => {
+	const [sentSubcontractorRequests, setSentSubcontractorRequests] = useState([]);
+	const [activeSentSSRs, setActiveSentSSRs] = useState([]);
+	const [isLoading, setIsLoading] = useState(true);
+
+	const fetchSentSubcontractorRequests = useCallback(async () => {
+		if (!userId || !generatorId) {
+			setIsLoading(false);
+			return;
+		}
+
+		try {
+			console.log("Fetching SSR data for userId:", userId, "generatorId:", generatorId);
+			setIsLoading(true);
+
+			const currentTransporterRef = doc(db, COLLECTIONS.transporters, userId);
+			const transporterDoc = await getDoc(currentTransporterRef);
+
+			if (transporterDoc.exists()) {
+				const transporterData = transporterDoc.data();
+
+				const sentRequests = transporterData.sharedGenerators?.fromMe || [];
+
+				const filteredSentRequests = sentRequests
+  .filter((req) => req.genId === generatorId)
+  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+				const receivedRequests = transporterData.sharedGenerators?.toMe || [];
+const filteredReceivedRequests = receivedRequests
+  .filter((req) => 
+    (req.genId === generatorId && req.status === "ACCEPTED") ||
+    (req.genId === generatorId && req.status === "TERMINATED") ||
+    (req.genId === generatorId && req.status === "TERMINATEACCEPTED")
+  )
+  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+
+				const activeSent = filteredSentRequests.filter((req) => req.status !== "CANCELLED");
+
+				const combinedRequests = [...activeSent, ...filteredReceivedRequests];
+
+				setActiveSentSSRs([...combinedRequests]);
+			} else {
+				setSentSubcontractorRequests([]);
+				setActiveSentSSRs([]);
+			}
+
+			setIsLoading(false);
+			console.log("SSR data fetch complete");
+		} catch (error) {
+			console.error("Error fetching subcontractor requests:", error);
+			setIsLoading(false);
+			setSentSubcontractorRequests([]);
+			setActiveSentSSRs([]);
+		}
+	}, [userId, generatorId]);
+
+	useEffect(() => {
+		if (!userId || !generatorId) return;
+
+		const unsubscribe = onSnapshot(
+			doc(db, COLLECTIONS.transporters, userId),
+			(docSnapshot) => {
+				if (docSnapshot.exists()) {
+					const data = docSnapshot.data();
+					const sentRequests = data.sharedGenerators?.fromMe || [];
+					const filteredSentRequests = sentRequests
+						.filter((req) => req.genId === generatorId)
+						.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+					setSentSubcontractorRequests(filteredSentRequests);
+
+					const activeSent = filteredSentRequests.filter((req) => req.status !== "CANCELLED");
+					const receivedRequests = data.sharedGenerators?.toMe || [];
+					const filteredReceivedRequests = receivedRequests
+						.filter(
+							(req) =>
+								(req.genId === generatorId && req.status === "ACCEPTED") ||
+								(req.genId === generatorId && req.status === "TERMINATED") ||
+								(req.genId === generatorId && req.status === "TERMINATEACCEPTED")
+						)
+						.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+					const combinedRequests = [...activeSent, ...filteredReceivedRequests];
+					setActiveSentSSRs(combinedRequests);
+				}
+			},
+			(error) => {
+				console.error("Error in SSR listener:", error);
+			}
+		);
+
+		return () => {
+			console.log("Cleaning up SSR listener");
+			unsubscribe();
+		};
+	}, [userId, generatorId]);
+
+	useEffect(() => {
+		if (userId && generatorId) {
+			fetchSentSubcontractorRequests();
+		}
+	}, [userId, generatorId, fetchSentSubcontractorRequests]);
+
+	const sendSubcontractorRequest = useCallback(
+		async (formData, transporterData, generatorData) => {
+			console.log("Sending SSR with formdata:", formData);
+
+			if (!userId || !formData?.selectedSubContractor?.id) {
+				showErrorToastMessage("Missing required information");
+				return false;
+			}
+
+			try {
+				const loadingToast = showLoadingToastMessage("Sending SSR request...");
+
+				const serviceDuration = formData.serviceSchedules?.serviceDuration || "15";
+				const weekdays =
+					formData.serviceSchedules?.serviceFrequency?.type === "MTWM"
+						? formData.serviceSchedules?.serviceFrequency?.days || []
+						: [];
+
+				const serviceRequest = {
+					genId: generatorData?.id,
+					serviceFrequency: formData.serviceSchedules?.serviceFrequency?.type,
+					weekdays: weekdays,
+					serviceType: formData.serviceSchedules?.serviceType,
+					requestedStartDate: formData.requestedStartDate,
+					serviceDuration: serviceDuration,
+					expectedItemsOrServices: formData.serviceSchedules?.expectedItemOrService || [],
+					serviceNote: formData.serviceNote || "",
+					subcontractorId: formData.selectedSubContractor?.id,
+					subContractorName: formData.selectedSubContractor?.Cname,
+					status: "PENDING",
+					createdAt: new Date().toISOString(),
+					timeStamp: new Date(),
+					ssrId: Date.now().toString(),
+					transporterName: transporterData?.companyDisplayName,
+					transporterId: userId,
+					establishedDate: new Date().toISOString(),
+				};
+
+				console.log("Created service request object:", serviceRequest);
+
+				const batch = writeBatch(db);
+				const transporterRef = doc(db, COLLECTIONS.transporters, formData.selectedSubContractor?.id);
+				const transporterDoc = await getDoc(transporterRef);
+
+				if (transporterDoc.exists()) {
+					let transporterData = transporterDoc.data();
+					let sharedGenerators = transporterData.sharedGenerators || {};
+					sharedGenerators.toMe = sharedGenerators.toMe || [];
+					sharedGenerators.toMe.push(serviceRequest);
+					batch.update(transporterRef, { sharedGenerators });
+					console.log("Added to subcontractor's toMe array");
+				} else {
+					console.log("Transporter not found.");
+					toast.dismiss(loadingToast);
+					return false;
+				}
+
+				const currentTransporterRef = doc(db, COLLECTIONS.transporters, userId);
+				const currentransporterDoc = await getDoc(currentTransporterRef);
+
+				if (currentransporterDoc.exists()) {
+					let transporterData = currentransporterDoc.data();
+					let sharedGenerators = transporterData.sharedGenerators || {};
+
+					if (!sharedGenerators.fromMe) {
+						sharedGenerators.fromMe = [];
+					}
+
+					sharedGenerators.fromMe.push(serviceRequest);
+					batch.update(currentTransporterRef, { sharedGenerators });
+					console.log("Added to current transporter's fromMe array");
+				} else {
+					console.log("Current transporter not found.");
+					toast.dismiss(loadingToast);
+					return false;
+				}
+				const subcontractorNotificationRef = doc(db, "notifications", formData.selectedSubContractor.id);
+				const notificationDocSnapshot = await getDoc(subcontractorNotificationRef);
+
+				if (!notificationDocSnapshot.exists()) {
+					batch.set(subcontractorNotificationRef, {
+						created: new Date(),
+					});
+				}
+
+				const newNotification = {
+					id: Date.now().toString(),
+					topic: "New SSR Request",
+					type: "SSR_Request",
+					message: `A new Subcontractor Service Request has been received from ${transporterData.companyDisplayName}`,
+					read: false,
+					timeStamp: new Date(),
+				};
+
+				const today = new Date();
+				const todayISOString = today.toISOString().split("T")[0] + "T00:00:00.000Z";
+				const dailyNotificationRef = doc(
+					collection(subcontractorNotificationRef, "dailyNotifications"),
+					todayISOString
+				);
+
+				const dailyNotificationDoc = await getDoc(dailyNotificationRef);
+
+				if (dailyNotificationDoc.exists()) {
+					const existingData = dailyNotificationDoc.data();
+					let notifications = Array.isArray(existingData.notifications) ? [...existingData.notifications] : [];
+
+					notifications.push(newNotification);
+					batch.update(dailyNotificationRef, { notifications });
+				} else {
+					batch.set(dailyNotificationRef, {
+						notifications: [newNotification],
+						dateCreated: new Date(),
+					});
+				}
+
+				console.log("Committing batch to Firestore");
+				await batch.commit();
+				console.log("Batch committed successfully", formData);
+				const subcontractorEmail = formData.selectedSubContractor?.Semail;
+				if (subcontractorEmail && subcontractorEmail !== "--") {
+					await sendSsrRequestEmail(subcontractorEmail, {
+						transporterName: transporterData?.companyDisplayName,
+						subContractorName: formData.selectedSubContractor?.Cname,
+						serviceType: serviceRequest.serviceType,
+						requestedStartDate: serviceRequest.requestedStartDate,
+						serviceNote: serviceRequest.serviceNote,
+					});
+				}
+
+				toast.dismiss(loadingToast);
+				setSentSubcontractorRequests((prev) => [serviceRequest, ...prev]);
+				setActiveSentSSRs((prev) => [serviceRequest, ...prev]);
+
+				showSuccessToastMessage(
+					`Subcontractor Service Request sent to ${formData.selectedSubContractor?.Cname} Successfully!`
+				);
+				return true;
+			} catch (error) {
+				console.error("Error sending request:", error);
+				showErrorToastMessage("Error sending request to subcontractor");
+				return false;
+			}
+		},
+		[userId, generatorId]
+	);
+
+	const cancelSubcontractorRequest = useCallback(
+		async (ssrToCancel, cancelReason, terminationDate = null, terminationNote = "", generatorName) => {
+			const isTermination = ssrToCancel.status === SERVICE_STATUS.ACCEPTED;
+			if (isTermination && (!terminationNote || terminationNote.trim() === "")) {
+				console.error("Missing cancellation reason");
+				showErrorToastMessage("Termination note is required.");
+				return false;
+			}
+			if (!isTermination && (!cancelReason || cancelReason.trim() === "")) {
+				console.error("Missing cancellation reason");
+				showErrorToastMessage("Cancelation note is required.");
+				return false;
+			}
+
+			if (!ssrToCancel || !ssrToCancel.ssrId) {
+				console.error("Invalid SSR to cancel:", ssrToCancel);
+				showErrorToastMessage("Cannot identify the SSR to cancel");
+				return false;
+			}
+
+			if (ssrToCancel.status === SERVICE_STATUS.ACCEPTED && !terminationDate) {
+				console.error("Missing termination date");
+				showErrorToastMessage("Termination Date is required.");
+				return false;
+			}
+
+			try {
+				console.log("Cancelling SSR:", ssrToCancel.ssrId);
+                showLoadingToastMessage(isTermination ? "Processing termination request..." : "Canceling request...");
+				const batch = writeBatch(db);
+				const currentTransporterRef = doc(db, COLLECTIONS.users, userId);
+				const transporterDoc = await getDoc(currentTransporterRef);
+				const subcontractorRef = doc(db, COLLECTIONS.transporters, ssrToCancel.subcontractorId);
+				const subcontractorDoc = await getDoc(subcontractorRef);
+
+				const cancellationData = {
+					status: isTermination ? "TERMINATED" : "CANCELLED",
+					cancelReason: cancelReason,
+					cancelledAt: new Date().toISOString(),
+					...(isTermination &&
+						terminationDate && {
+							requestedTerminationDate: terminationDate,
+							requester: `${transporterDoc.data()?.name}`,
+							requesterEmail: transporterDoc.data()?.email,
+							requesterPhone: transporterDoc.data()?.phoneNumber,
+							terminationNote: terminationNote,
+						}),
+				};
+
+				let updatedFirestore = false;
+
+				if (transporterDoc.exists()) {
+					const transporterData = transporterDoc.data();
+					let sharedGenerators = transporterData.sharedGenerators || {};
+
+					if (sharedGenerators.fromMe && sharedGenerators.fromMe.length) {
+						const requestIndex = sharedGenerators.fromMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
+						console.log("Found request index in fromMe:", requestIndex);
+
+						if (requestIndex !== -1) {
+							sharedGenerators.fromMe[requestIndex] = {
+								...sharedGenerators.fromMe[requestIndex],
+								...cancellationData,
+							};
+
+							batch.update(currentTransporterRef, { sharedGenerators });
+							updatedFirestore = true;
+						}
+					}
+				}
+
+				if (subcontractorDoc.exists()) {
+					const subcontractorData = subcontractorDoc.data();
+					let subSharedGenerators = subcontractorData.sharedGenerators || {};
+
+					if (subSharedGenerators.toMe && subSharedGenerators.toMe.length) {
+						const subRequestIndex = subSharedGenerators.toMe.findIndex((req) => req.ssrId === ssrToCancel.ssrId);
+						console.log("Found request index in toMe:", subRequestIndex);
+
+						if (subRequestIndex !== -1) {
+							subSharedGenerators.toMe[subRequestIndex] = {
+								...subSharedGenerators.toMe[subRequestIndex],
+								...cancellationData,
+							};
+
+							batch.update(subcontractorRef, { sharedGenerators: subSharedGenerators });
+							updatedFirestore = true;
+						}
+					}
+				}
+
+				// const genId = ssrToCancel.genId;
+				// if (genId) {
+				// 	const generatorRef = doc(db, COLLECTIONS.generators, genId);
+				// 	const generatorDoc = await getDoc(generatorRef);
+
+				// 	if (generatorDoc.exists()) {
+				// 		const generatorData = generatorDoc.data();
+				// 		const existingSubcontractors = generatorData.subContractors || [];
+
+				// 		const subContractorId = ssrToCancel.subcontractorId;
+				// 		const remainingSubcontractors = existingSubcontractors.filter(
+				// 			(sub) => String(sub.id) !== String(subContractorId)
+				// 		);
+
+				// 		console.log("Subcontractor to remove:", subContractorId);
+				// 		console.log("Original subcontractors:", existingSubcontractors.length);
+				// 		console.log("Remaining subcontractors:", remainingSubcontractors.length);
+
+				// 		const filteredSSRforGen = activeSentSSRs.filter(
+				// 			(ssrs) => ssrs.genId === genId && String(ssrs.subcontractorId) === String(subContractorId)
+				// 		);
+
+				// 		if (filteredSSRforGen.length === 1) {
+				// 			console.log("This is the only SSR for this generator-subcontractor pair, updating generator");
+				// 			batch.update(generatorRef, {
+				// 				subContractors: remainingSubcontractors,
+				// 				isSubContracted: remainingSubcontractors.length > 0,
+				// 			});
+				// 			updatedFirestore = true;
+				// 		}
+				// 	}
+				// }
+
+				if (!updatedFirestore) {
+					console.warn("No updates were made to Firestore");
+				}
+
+				await batch.commit();
+				if (isTermination) {
+					try {
+						const subcontractorNotificationRef = doc(db, "notifications", ssrToCancel.subcontractorId);
+						const notificationDocSnapshot = await getDoc(subcontractorNotificationRef);
+
+						if (!notificationDocSnapshot.exists()) {
+							await setDoc(subcontractorNotificationRef, {
+								created: new Date(),
+							});
+						}
+
+						const newNotification = {
+							id: Date.now().toString(),
+							topic: "Termination Request",
+							type: "service_action",
+							generatorId: ssrToCancel.genId,
+							message: `A termination request has been initiated for generator: ${generatorName}  by ${ssrToCancel.transporterName}.`,
+							read: false,
+							timeStamp: new Date(),
+						};
+
+						const today = new Date();
+						const todayISOString = today.toISOString().split("T")[0] + "T00:00:00.000Z";
+						const dailyNotificationRef = doc(
+							collection(subcontractorNotificationRef, "dailyNotifications"),
+							todayISOString
+						);
+
+						const dailyNotificationDoc = await getDoc(dailyNotificationRef);
+
+						if (dailyNotificationDoc.exists()) {
+							const existingData = dailyNotificationDoc.data();
+							let notifications = Array.isArray(existingData.notifications) ? [...existingData.notifications] : [];
+							notifications.push(newNotification);
+							await updateDoc(dailyNotificationRef, { notifications });
+						} else {
+							await setDoc(dailyNotificationRef, {
+								notifications: [newNotification],
+								dateCreated: new Date(),
+							});
+						}
+					} catch (notifyErr) {
+						console.error("Error sending termination notification:", notifyErr);
+					}
+				}
+				const updatedSentRequests = sentSubcontractorRequests.map((req) =>
+					req.ssrId === ssrToCancel.ssrId
+						? {
+								...req,
+								...cancellationData,
+						  }
+						: req
+				);
+				setSentSubcontractorRequests(updatedSentRequests);
+
+				const updatedActiveSSRs = isTermination
+					? activeSentSSRs.map((ssr) =>
+							ssr.ssrId === ssrToCancel.ssrId
+								? {
+										...ssr,
+										...cancellationData,
+								  }
+								: ssr
+					  )
+					: activeSentSSRs.filter((ssr) => ssr.ssrId !== ssrToCancel.ssrId);
+				setActiveSentSSRs(updatedActiveSSRs);
+
+				showSuccessToastMessage(
+					isTermination
+						? "Subcontractor termination request sent successfully"
+						: "Subcontractor request canceled successfully"
+				);
+				return true;
+			} catch (error) {
+				console.error("Error cancelling SSR:", error, error.stack);
+				showErrorToastMessage("Error canceling subcontractor request");
+				return false;
+			}
+		},
+		[userId, sentSubcontractorRequests, activeSentSSRs, generatorId]
+	);
+
+	return {
+		sentSubcontractorRequests,
+		activeSentSSRs,
+		isLoading,
+		cancelSubcontractorRequest,
+		sendSubcontractorRequest,
+		fetchSentSubcontractorRequests,
+	};
+};
+
+export const useSSRManagement = (userId, generatorId) => {
+	const containers = useContainers(userId);
+	const subcontractors = useSubcontractors(userId);
+	const ssrRequests = useSsrRequests(userId, generatorId);
+
+	return {
+		...containers,
+		...subcontractors,
+		...ssrRequests,
+		isLoading: containers.isLoading || subcontractors.isLoading || ssrRequests.isLoading,
+	};
+};
+
+export async function sendSsrRequestEmail(subcontractorEmail, ssrData) {
+	try {
+		const data = {
+			template: {
+				data: ssrData,
+				name: "ssr_request_template",
+			},
+			to: [subcontractorEmail],
+			createdAt: serverTimestamp(),
+		};
+
+		showLoadingToastMessage("Sending SSR request email...");
+
+		await addDoc(collection(db, "mails"), data);
+
+		showSuccessToastMessage("SSR request email sent successfully");
+	} catch (error) {
+		console.error("Error sending SSR email:", error);
+		showErrorToastMessage("Failed to send SSR email");
+	}
+}
