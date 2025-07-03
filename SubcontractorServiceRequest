@@ -23,9 +23,10 @@ import {
 import { AzureMap, AzureMapsContext, AzureMapsProvider } from "react-azure-maps";
 import CustomAzureGeneratorDashboardMap from "../../generator-portal/dashboard/CustomAzureGeneratorDashboardMap";
 import { useSSRNotifications } from "../../../context/pendingSSRContext";
-import CustomHtmlGeneratorMarker from "../../../components/maps/CustomHtmlGeneratorMarker";
 import { FaMinus, FaPlus } from "react-icons/fa";
 import { AuthenticationType, data } from "azure-maps-control";
+import RouteAssignment from "../generator-management/components/generators/components/detail-forms/forms/components/RouteAssignment";
+import Explainer from "../../../components/UI/Explainer";
 
 export const fetchDocumentsInBatches = async (db, collectionName, docIds) => {
 	if (!docIds.length) return [];
@@ -105,10 +106,12 @@ const fetchContractorData = async (transporterId, db, COLLECTIONS) => {
 			if (!contractorDoc.exists()) return null;
 
 			const contractorData = contractorDoc.data();
+			console.log("contractorData", contractorData);
+
 			return {
 				id: contractorId,
 				contractorDocid: contractorDoc.id,
-				contractorName: contractorData.companyName ?? "--",
+				contractorName: contractorData.companyDisplayName ?? "--",
 				address: formatAdd(contractorData),
 				generalEmail: contractorData.generalEmail?.length > 0 ? contractorData.generalEmail : "--",
 				phoneNumber: contractorData.phoneNumber ?? "--",
@@ -164,14 +167,30 @@ const SubcontractorServiceRequest = () => {
 	const [allGenerators, setAllGeneratorsData] = useState([]);
 	const [allRoutes, setAllRoutes] = useState([]);
 	const { mapRef, isMapReady, removeMapRef } = useContext(AzureMapsContext);
-
-	const authOptions = {
-		authType: AuthenticationType.subscriptionKey,
-		subscriptionKey: import.meta.env.VITE_AZURE_MAPS_SUBSCRIPTION_KEY,
-	};
+	const [mapLoaded, setMapLoaded] = useState(false);
 
 	const handleRowClick = (generator) => {
-		setSelectedGenerator(generator);
+		if (!generator) return;
+		if (!generator.serviceAddCoordinates?.lat || !generator.serviceAddCoordinates?.lng) return;
+		setSelectedGenerator({
+			...generator,
+			randomCoordinates: randomizeCoordinates(generator.serviceAddCoordinates.lat, generator.serviceAddCoordinates.lng),
+		});
+		const generatorExists = allGenerators.some(
+			(gen) => gen.id === generator.id || gen.id === generator.genId || (generator.id && gen.genId === generator.id)
+		);
+		if (!generatorExists && generator.serviceAddCoordinates?.lat && generator.serviceAddCoordinates?.lng) {
+			const genWithCoordinates = {
+				...generator,
+				id: generator.id || generator.genId,
+				randomCoordinates:
+					generator.randomCoordinates ||
+					randomizeCoordinates(generator.serviceAddCoordinates.lat, generator.serviceAddCoordinates.lng),
+			};
+
+			setAllGeneratorsData((prevGenerators) => [...prevGenerators, genWithCoordinates]);
+		}
+
 		setShowGeneratorDetailsModal(true);
 	};
 
@@ -185,10 +204,12 @@ const SubcontractorServiceRequest = () => {
 		{ label: "Pending", value: SERVICE_STATUS.PENDING },
 		{ label: "Accepted", value: SERVICE_STATUS.ACCEPTED },
 		{ label: "Declined", value: SERVICE_STATUS.DECLINED },
-		{ label: "Cancelled", value: SERVICE_STATUS.CANCELLED },
+		{ label: "Canceled", value: SERVICE_STATUS.CANCELLED },
+		{ label: "Termination Requested", value: "TERMINATED" },
+		{ label: "Terminated", value: "TERMINATEACCEPTED" },
 	];
 
-	const [selectedStatuses, setSelectedStatuses] = useState([SERVICE_STATUS.PENDING]);
+	const [selectedStatuses, setSelectedStatuses] = useState([SERVICE_STATUS.PENDING, "TERMINATED"]);
 
 	useEffect(() => {
 		let unsubscribe = onSnapshot(collection(db, "defaultPriceBook", "services", "containers"), (snap) => {
@@ -250,18 +271,26 @@ const SubcontractorServiceRequest = () => {
 		if (
 			isMapReady &&
 			mapRef &&
-			selectedGenerator.serviceAddCoordinates.lng &&
-			selectedGenerator.serviceAddCoordinates.lat
+			selectedGenerator?.serviceAddCoordinates?.lng &&
+			selectedGenerator?.serviceAddCoordinates?.lat
 		) {
-			// // markerPositions.push(new data.Position(generatorData.randomCoordinates.lng, generatorData.randomCoordinates.lat));
-			const box = data.BoundingBox.fromPositions([
-				new data.Position(selectedGenerator.serviceAddCoordinates.lng, selectedGenerator.serviceAddCoordinates.lat),
-			]);
-			const center = data.BoundingBox.getCenter(box);
-			mapRef.setCamera({ center: center, zoom: 12, duration: 200, type: "ease" });
+			console.log("Centering map on:", selectedGenerator.serviceAddCoordinates);
+			const position = new data.Position(
+				selectedGenerator.serviceAddCoordinates.lng,
+				selectedGenerator.serviceAddCoordinates.lat
+			);
+
+			mapRef.setCamera({
+				center: position,
+				zoom: 12,
+				duration: 200,
+				type: "ease",
+			});
+
 			limitScrollWheelZoom(mapRef);
+			setMapLoaded(true);
 		}
-	}, [isMapReady, mapRef, selectedGenerator]);
+	}, [isMapReady, mapRef, selectedGenerator, mapLoaded]);
 
 	useEffect(() => {
 		const getAllOtherRoutes = async () => {
@@ -430,6 +459,43 @@ const SubcontractorServiceRequest = () => {
 		setSearchQuery("");
 		console.log("Filters cleared");
 	};
+
+	const [contractorDisplayNames, setContractorDisplayNames] = useState({});
+
+	const fetchContractorDisplayNames = async (contractorIds) => {
+		if (!contractorIds || contractorIds.length === 0) return {};
+
+		try {
+			const displayNames = {};
+			await Promise.all(
+				contractorIds.map(async (contractorId) => {
+					if (!contractorId) return;
+
+					const snapRef = doc(db, COLLECTIONS.transporters, contractorId);
+					const snapDoc = await getDoc(snapRef);
+
+					if (snapDoc.exists()) {
+						const snapData = snapDoc.data();
+						displayNames[contractorId] =
+							snapData.companyDisplayName || snapData.companyName || snapData.transporterName || "Unknown Contractor";
+					}
+				})
+			);
+
+			setContractorDisplayNames(displayNames);
+			return displayNames;
+		} catch (error) {
+			console.error("Error fetching contractor display names:", error);
+			return {};
+		}
+	};
+
+	useEffect(() => {
+		if (!allDatas || allDatas.length === 0) return;
+
+		const contractorIds = [...new Set(allDatas.map((item) => item.transporterId).filter(Boolean))];
+		fetchContractorDisplayNames(contractorIds);
+	}, [allDatas]);
 
 	useEffect(() => {
 		let filtered = allDatas;
@@ -643,7 +709,7 @@ const SubcontractorServiceRequest = () => {
 						id: subContractorId,
 						name: transporterName,
 						addedAt: new Date(),
-						subContractorName: currTransporterData.companyName,
+						subContractorName: currTransporterData.companyDisplayName,
 					},
 				];
 			}
@@ -654,7 +720,7 @@ const SubcontractorServiceRequest = () => {
 				subContractor: {
 					id: subContractorId,
 					name: transporterName,
-					subContractorName: currTransporterData.companyName,
+					subContractorName: currTransporterData.companyDisplayName,
 				},
 			});
 
@@ -681,6 +747,12 @@ const SubcontractorServiceRequest = () => {
 
 		return () => {};
 	}, [selectedGenerator]);
+
+	useEffect(() => {
+		if (!showGeneratorDetailsModal) {
+			setMapLoaded(false);
+		}
+	}, [showGeneratorDetailsModal]);
 
 	const pendingConnectionsProps = {
 		user,
@@ -721,7 +793,10 @@ const SubcontractorServiceRequest = () => {
 				<div className="main-container flex flex-col border border-cardBorderCol bg-white rounded-cardRadii h-1/2 gap-2">
 					<div className="text-lg px-8 py-4 flex items-center gap-2">
 						<div className="flex flex-col gap-2">
-							<div className="text-xl xl:text-2xl font-semibold text-black">Incoming SSR</div>
+							<div className="text-xl xl:text-2xl font-semibold text-black flex gap-4 items-center">
+								<h1>Incoming SSR</h1>
+								<SsrOctoInfoPanel />
+							</div>
 							<h6 className="text-nowrap text-sm font-normal text-cardTextGray ">
 								{filteredDatas?.length} of {allDatas.length} Requests
 							</h6>
@@ -778,7 +853,9 @@ const SubcontractorServiceRequest = () => {
 										onClick={() => handleRowClick(generator)}
 									>
 										<div className={`w-full flex items-center`}>
-											<div className="truncate w-60 h-full">{generator?.transporterName ?? "--"}</div>
+											<div className="truncate w-60 h-full">
+												{contractorDisplayNames[generator?.transporterId] || generator?.transporterName || "--"}
+											</div>{" "}
 											{generator.status != SERVICE_STATUS.ACCEPTED ? (
 												<div className="w-40 h-full text-cardTextBlue truncate">{generator.octoNumber ?? "--"}</div>
 											) : (
@@ -790,15 +867,20 @@ const SubcontractorServiceRequest = () => {
 												</Link>
 											)}
 											<div className="truncate w-60 h-full">
-												{generator.status === SERVICE_STATUS.ACCEPTED
+												{generator.status === SERVICE_STATUS.ACCEPTED ||
+												generator.status === "TERMINATED" ||
+												generator.status === "TERMINATEACCEPTED"
 													? generator.generatorName ?? "--"
 													: generator.status === SERVICE_STATUS.DECLINED ||
 													  generator.status === SERVICE_STATUS.CANCELLED
 													? "Service Declined/Canceled"
 													: "Accept Service To See"}
 											</div>
+											{console.log("service address", generator)}
 											<div className="truncate w-80 h-full">
-												{generator.status === SERVICE_STATUS.ACCEPTED
+												{generator.status === SERVICE_STATUS.ACCEPTED ||
+												generator.status === "TERMINATED" ||
+												generator.status === "TERMINATEACCEPTED"
 													? renderAddress(generator.serviceAddress)
 													: shortAddress(generator.serviceAddress)}
 											</div>
@@ -842,7 +924,15 @@ const SubcontractorServiceRequest = () => {
 													"--"
 												)}
 											</div>
-											<div className="truncate h-full w-32">{capitalizeFirstLetter(generator.status)}</div>
+											<div className="truncate h-full w-32">
+												{capitalizeFirstLetter(
+													generator.status === "TERMINATED"
+														? "Termination Requested"
+														: generator.status === "TERMINATEACCEPTED"
+														? "Terminated"
+														: generator.status
+												)}
+											</div>
 											<div className="truncate h-full w-60">{formattedDateTime(generator.timeStamp) ?? "--"}</div>
 											<div className="h-full w-60 whitespace-normal overflow-auto">{generator.serviceNote ?? "--"}</div>
 											<div className="h-full w-40 whitespace-normal overflow-auto">{generator.pricebook ?? "--"}</div>
@@ -945,14 +1035,15 @@ const SubcontractorServiceRequest = () => {
 					</div>
 				</dialog>
 			</div>
-			{/* Generator Details Modal */}
 			{showGeneratorDetailsModal && selectedGenerator && (
 				<div className="z-40 fixed inset-0 bg-black/50 flex justify-center items-center">
-					<div className="bg-white z-20 rounded-xl max-w-[150vh] w-full max-h-[90vh] shadow-lg">
-						<div className="flex justify-between items-center  p-5 ">
+					<div className="bg-white z-20 rounded-xl max-w-[150vh] w-full max-h-[95vh] shadow-lg flex flex-col">
+						<div className="flex justify-between items-center p-5">
 							<div>
 								<h2 className="text-xl font-semibold text-gray-800">
-									{selectedGenerator.status === SERVICE_STATUS.ACCEPTED
+									{selectedGenerator.status === SERVICE_STATUS.ACCEPTED ||
+									selectedGenerator.status === "TERMINATED" ||
+									selectedGenerator.status === "TERMINATEACCEPTED"
 										? selectedGenerator.generatorName || "Generator Details"
 										: "Subcontractor Service Request (SSR) Details"}
 								</h2>
@@ -961,13 +1052,17 @@ const SubcontractorServiceRequest = () => {
 									onClick={() => {
 										navigate(`/admin/generators/${selectedGenerator?.id}/generator-Dashboard`);
 									}}
-									disabled={selectedGenerator.status !== SERVICE_STATUS.ACCEPTED}
+									disabled={
+										selectedGenerator.status !== SERVICE_STATUS.ACCEPTED &&
+										selectedGenerator.status !== "TERMINATED" &&
+										selectedGenerator.status !== "TERMINATEACCEPTED"
+									}
 								>
 									View Profile
 								</button>
 							</div>
 
-							<div className="flex items-center gap-3 overflow-y-auto">
+							<div className="flex items-center gap-3">
 								<span
 									className={`px-3 py-1 rounded-full text-xs font-medium ${
 										selectedGenerator.status === SERVICE_STATUS.PENDING
@@ -979,7 +1074,13 @@ const SubcontractorServiceRequest = () => {
 											: "bg-gray-100 text-gray-800"
 									}`}
 								>
-									{capitalizeFirstLetter(selectedGenerator.status)}
+									{capitalizeFirstLetter(
+										selectedGenerator.status === "TERMINATED"
+											? "Termination Requested"
+											: selectedGenerator.status === "TERMINATEACCEPTED"
+											? "Terminated"
+											: selectedGenerator.status
+									)}{" "}
 								</span>
 								<button
 									onClick={closeGeneratorDetailsModal}
@@ -990,7 +1091,7 @@ const SubcontractorServiceRequest = () => {
 							</div>
 						</div>
 
-						<div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[calc(85vh-150px)]">
+						<div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 gap-6">
 							<div className="p-5 overflow-y-auto">
 								<div className="space-y-4">
 									<h3 className="font-medium text-gray-700">Generator Information</h3>
@@ -1003,12 +1104,21 @@ const SubcontractorServiceRequest = () => {
 
 										<div className="bg-gray-50 p-3 rounded-lg">
 											<p className="text-sm text-gray-500">Service Address</p>
-											<p className="font-medium">{renderAddress(selectedGenerator.serviceAddress) || "--"}</p>
+											<p className="font-medium">
+												{selectedGenerator.status === SERVICE_STATUS.ACCEPTED ||
+												selectedGenerator.status === "TERMINATED" ||
+												selectedGenerator.status === "TERMINATEACCEPTED"
+													? renderAddress(selectedGenerator.serviceAddress)
+													: shortAddress(selectedGenerator.serviceAddress) || "--"}
+											</p>
 										</div>
-
 										<div className="bg-gray-50 p-3 rounded-lg">
 											<p className="text-sm text-gray-500">Contractor Name</p>
-											<p className="font-medium">{selectedGenerator.transporterName || "--"}</p>
+											<p className="font-medium">
+												{contractorDisplayNames[selectedGenerator?.transporterId] ||
+													selectedGenerator?.transporterName ||
+													"--"}
+											</p>
 										</div>
 
 										<div className="bg-gray-50 p-3 rounded-lg">
@@ -1076,7 +1186,9 @@ const SubcontractorServiceRequest = () => {
 														<span className="font-medium mr-2 px-2 py-1 rounded whitespace-nowrap">
 															({itemObj?.quantity || 1})
 														</span>
-														<span className="break-words">{itemsMap?.[itemObj?.item] || itemObj?.item}</span>
+														<span className="break-words overflow-hidden">
+															{itemsMap?.[itemObj?.item] || itemObj?.item}
+														</span>
 													</div>
 												))}
 											</div>
@@ -1087,57 +1199,28 @@ const SubcontractorServiceRequest = () => {
 								</div>
 							</div>
 
-							<div className="h-full">
+							<div className="p-5 flex flex-col overflow-y-auto">
 								{console.log("modal data", selectedGenerator)}
-								<div className="w-full h-2/3 rounded-xl p-2 z-50 bg-white">
-									<AzureMap options={{ authOptions: authOptions, view: "Auto" }}>
-										{allGenerators.length > 0 &&
-											allGenerators.map((genData) => {
-												if (
-													genData?.serviceAddCoordinates &&
-													genData?.serviceAddCoordinates.lat &&
-													genData?.serviceAddCoordinates.lng
-												) {
-													return (
-														<CustomHtmlGeneratorMarker
-															key={genData.id}
-															genData={genData}
-															draggable={true}
-															allRoutes={allRoutes}
-															isCurrent={selectedGenerator.id === genData.id ? true : false}
-														/>
-													);
-												}
-												return null;
-											})}
-										<div className="absolute bottom-5 right-5 flex flex-col gap-2 z-10">
-											<button
-												onClick={zoomIn}
-												className="w-10 h-10 flex items-center justify-center 
-																	 bg-gray-400 bg-opacity-30 hover:bg-opacity-50 active:bg-opacity-100 
-																		font-bold rounded shadow-md"
-											>
-												<FaPlus />
-											</button>
-											<button
-												onClick={zoomOut}
-												className="w-10 h-10 flex items-center justify-center 
-																	 bg-gray-400 bg-opacity-30 hover:bg-opacity-50 active:bg-opacity-100 
-																	 font-bold rounded shadow-md"
-											>
-												<FaMinus />
-											</button>
-										</div>
-									</AzureMap>
+								<div className="flex-grow rounded-xl bg-white mb-4">
+									<AzureMapsProvider>
+										<RouteAssignment
+											allRoutes={allRoutes}
+											generatorData={selectedGenerator}
+											allGeneratorsData={allGenerators}
+											isInSSr={true}
+										/>
+									</AzureMapsProvider>
 								</div>
-								<GeneratorOfficeHours
-									workingHours={selectedGenerator?.workingHours}
-									genTimeZone={selectedGenerator?.workingHours?.timeZone}
-								/>
+								<div className="mb-2">
+									<GeneratorOfficeHours
+										workingHours={selectedGenerator?.workingHours}
+										genTimeZone={selectedGenerator?.workingHours?.timeZone}
+									/>
+								</div>
 							</div>
 						</div>
 
-						<div className=" p-4 flex justify-end gap-3">
+						<div className="border-t p-4 flex justify-end gap-3 mt-auto">
 							{selectedGenerator.status === SERVICE_STATUS.PENDING && (
 								<>
 									<button
@@ -1252,3 +1335,71 @@ const GeneratorOfficeHours = ({ workingHours = {}, genTimeZone }) => {
 		</div>
 	);
 };
+
+export function SsrOctoInfoPanel() {
+	const statusColors = {
+		Pending: "text-yellow-800",
+		Accepted: "text-green-800",
+		Declined: "text-red-800",
+		Cancelled: "text-gray-800",
+		"Termination Requested": "text-yellow-800",
+		Terminated: "text-gray-800",
+	};
+
+	const statusList = [
+		{
+			key: "Pending",
+			label: "Pending",
+			description: "The request has been sent and is awaiting action.",
+		},
+		{
+			key: "Accepted",
+			label: "Accepted",
+			description: "The request has been accepted and the service relationship is now active.",
+		},
+		{
+			key: "Declined",
+			label: "Declined",
+			description: "The request has been rejected by the recipient.",
+		},
+		{
+			key: "Cancelled",
+			label: "Canceled",
+			description: "The request was canceled by the sender before acceptance.",
+		},
+		{
+			key: "Termination Requested",
+			label: "Termination Requested",
+			description: "A request has been made to terminate an active SSR (service will end soon).",
+		},
+		{
+			key: "Terminated",
+			label: "Terminated",
+			description: "The SSR has been formally terminated and the service relationship ended.",
+		},
+	];
+
+	const explainerContent = (
+		<div className="p-4 space-y-2">
+			<div className="font-semibold mb-2">Subcontractor Service Request (SSR) Status System:</div>
+			<ul className="list-none ml-0 mt-2 space-y-2 text-sm">
+				{statusList.map((status) => (
+					<li key={status.key} className="flex items-center gap-2">
+						<span
+							className={`inline-block font-semibold text-xs mr-1 min-w-20 text-center ${statusColors[status.label]}`}
+						>
+							{status.label}
+						</span>
+						<span>{status.description}</span>
+					</li>
+				))}
+			</ul>
+			<div className="mt-4 text-xs text-gray-700">
+				You can view the current status for each SSR in the status column. Actions available depend on the current
+				status. For further details, click "View Details" on any SSR.
+			</div>
+		</div>
+	);
+
+	return <Explainer text={explainerContent} maxWidth={520} />;
+}
