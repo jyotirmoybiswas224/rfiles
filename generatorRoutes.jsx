@@ -1,4 +1,3 @@
-
 import PropTypes from "prop-types";
 import React, { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
@@ -235,7 +234,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 		let snapDoc = await getDoc(snapRef);
 		let snapData = { id: snapDoc.id, ...snapDoc.data() };
 		console.log({ snapData });
-		setTransporterName(snapData?.companyName);
+		setTransporterName(snapData?.companyDisplayName);
 	};
 
 	const updateGeneratorData = async () => {
@@ -384,12 +383,14 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 
 						if (snap.docs.length) {
 							snap.docs.forEach((el) => {
-								tempOptions.push({
-									label: el.data()?.masterItemName ?? "--",
-									value: el.id,
-									subWasteType: el.data()?.subWasteType,
-								});
-								tempMap[el.id] = el.data()?.masterItemName ?? "--";
+								if (el.data()?.active) {
+									tempOptions.push({
+										label: el.data()?.masterItemName ?? "--",
+										value: el.id,
+										subWasteType: el.data()?.subWasteType,
+									});
+									tempMap[el.id] = el.data()?.masterItemName ?? "--";
+								}
 							});
 
 							setItemsMap((prevMap) => ({ ...prevMap, ...tempMap }));
@@ -1336,8 +1337,8 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 				? oldSubContractorDoc.data()?.sharedGenerators ?? {}
 				: {};
 
-			const transporterName = currentTransporterDoc.data().companyName || "Unknown";
-			const subContractorName = newSubContractorDoc.data().companyName || "Unknown";
+			const transporterName = currentTransporterDoc.data().companyDisplayName || "Unknown";
+			const subContractorName = newSubContractorDoc.data().companyDisplayName || "Unknown";
 
 			// Remove the SSR from the old subcontractor's toMe array
 			if (oldSubContractorDoc.exists()) {
@@ -1440,6 +1441,30 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 			setShowSSRForm(false);
 		}
 	}, [user?.uid, generatorData?.id]);
+
+	const getEstablishedDate = (index) => {
+		() => {
+			const date = watchServiceSchedules[index]?.establishedDate;
+			if (!date) return "--";
+			try {
+				if (date && typeof date === "object" && date.seconds !== undefined) {
+					return dateFormatter(new Date(date.seconds * 1000));
+				}
+				if (date instanceof Date) {
+					return dateFormatter(date);
+				}
+				if (typeof date === "string") {
+					const parsedDate = new Date(date);
+					if (!isNaN(parsedDate.getTime())) {
+						return dateFormatter(parsedDate);
+					}
+				}
+				return "--";
+			} catch (e) {
+				return "--";
+			}
+		};
+	};
 
 	const isReadOnly = useMemo(() => user?.uid !== generatorData?.transporterId, [user, generatorData]);
 	const filteredRouteOptions = useMemo(() => {
@@ -1821,12 +1846,12 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 													};
 
 													return getFormattedDate(date);
-												})}
+												})()}
 											</div>
 										</div>
 									</div>
 								)}
-								 <div className="flex items-center mt-2 mb-2">
+								<div className="flex items-center mt-2 mb-2">
 									<input
 										type="checkbox"
 										id={`doNotifyAllUsers-${index}`}
