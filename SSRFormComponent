@@ -1,0 +1,1016 @@
+import React, { memo, useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { HiOutlineChevronDown, HiOutlineChevronUp } from "react-icons/hi";
+import SearchableDropdownForParents from "../../../../../../../../../components/UI/dropdowns/SearchableDropdownForParents";
+import MultiSelectRounded from "../../../../../../../../../components/UI/dropdowns/MultiSelectRounded";
+import Textarea from "../../../../../../../../../components/UI/Textarea";
+import CustomDatePicker from "../../../../../../../../../components/UI/CustomDatePicker";
+import Dropdown from "../../../../../../../../../components/UI/dropdowns/Dropdown";
+import {
+	capitalizeFirstLetter,
+	dateFormatter,
+	showErrorToastMessage,
+	showSuccessToastMessage,
+} from "../../../../../../../../../utils/helpers";
+import { SERVICE_STATUS } from "../../../../../../../../../utils/constants";
+import { useSSRManagement } from "../../../../../../../../../utils/useSsrRequests";
+import { collection, doc, getDoc, getDocs, orderBy, query, updateDoc, where, writeBatch } from "firebase/firestore";
+import { COLLECTIONS, db } from "../../../../../../../../../config/firebase";
+
+const SsrFormComponent = memo(
+	({
+		isReadOnly,
+		ssrData,
+		control,
+		trigger,
+		setValue,
+		getValues,
+		watch,
+		errors,
+		serviceFrequencyOptions,
+		weekdayOptions,
+		itemsMap,
+		serviceTypes,
+		itemsOptions,
+		SERVICE_TYPES,
+		serviceNoteRef,
+		KeepContainers,
+		setKeepContainers,
+		serviceDurationOptions,
+		transporterData,
+		currentUserId,
+		generatorData,
+	}) => {
+		const [localFormState, setLocalFormState] = useState({
+			selectedSubContractor: null,
+			serviceFrequency: {
+				type: "",
+				days: [],
+			},
+			requestedStartDate: null,
+			serviceType: "",
+			serviceDuration: "15",
+			expectedItemOrService: [],
+			serviceNote: "",
+		});
+
+		const {
+			subContractorContainers,
+			handleSubcontractorSelected,
+			isOctoMarketUser,
+			subContractorData,
+			sentSubcontractorRequests,
+			activeSentSSRs,
+			cancelSubcontractorRequest,
+			sendSubcontractorRequest,
+			getServiceFrequencyForSubcontractor,
+			subcontractorServiveFrequencyOptions,
+		} = useSSRManagement(currentUserId, generatorData?.id);
+
+		const watchedSelectedSubContractor = watch("selectedSubContractor");
+		const watchedFrequencyType = watch("serviceSchedules.serviceFrequency.type");
+		const watchedFrequencyDays = watch("serviceSchedules.serviceFrequency.days");
+		const watchedStartDate = watch("requestedStartDate");
+		const watchedServiceType = watch("serviceSchedules.serviceType");
+		const watchedServiceDuration = watch("serviceSchedules.serviceDuration");
+		const watchedExpectedItems = watch("serviceSchedules.expectedItemOrService");
+		const watchedServiceNote = watch("serviceNote");
+		const [isTerminationAccepted, setIsTerminationAccepted] = useState(localFormState.status === "TERMINATEACCEPTED");
+		const [isAcceptingTermination, setIsAcceptingTermination] = useState(false);
+
+		useEffect(() => {
+			setIsTerminationAccepted(localFormState.status === "TERMINATEACCEPTED");
+		}, [localFormState.status]);
+
+		const handleAcceptTermination = async (ssrId) => {
+			try {
+				setIsAcceptingTermination(true);
+				const transporterRef = doc(db, COLLECTIONS.transporters, currentUserId);
+				const transporterDoc = await getDoc(transporterRef);
+
+				if (!transporterDoc.exists()) {
+					throw new Error("Transporter document not found");
+				}
+
+				const transporterData = transporterDoc.data();
+				const sharedGenerators = transporterData.sharedGenerators || {};
+				const toMeArray = sharedGenerators.toMe || [];
+
+				const ssrItem = toMeArray.find((item) => item.ssrId === ssrId);
+				if (!ssrItem) {
+					throw new Error("SSR not found in current user's records");
+				}
+				const contractorId = ssrItem.transporterId;
+				if (!contractorId) {
+					throw new Error("Contractor ID not found in SSR data");
+				}
+
+				const updatedToMe = toMeArray.map((item) => {
+					if (item.ssrId === ssrId) {
+						return {
+							...item,
+							status: "TERMINATEACCEPTED",
+							terminationAcceptedAt: new Date().toISOString(),
+							terminationAcceptedBy: currentUserId,
+						};
+					}
+					return item;
+				});
+
+				await updateDoc(transporterRef, {
+					"sharedGenerators.toMe": updatedToMe,
+				});
+
+				const contractorRef = doc(db, COLLECTIONS.transporters, contractorId);
+				const contractorDoc = await getDoc(contractorRef);
+
+				if (!contractorDoc.exists()) {
+					throw new Error("Contractor document not found");
+				}
+
+				const contractorData = contractorDoc.data();
+				const contractorSharedGens = contractorData.sharedGenerators || {};
+				const fromMeArray = contractorSharedGens.fromMe || [];
+
+				const updatedFromMe = fromMeArray.map((item) => {
+					if (item.ssrId === ssrId) {
+						return {
+							...item,
+							status: "TERMINATEACCEPTED",
+							terminationAcceptedAt: new Date().toISOString(),
+							terminationAcceptedBy: currentUserId,
+						};
+					}
+					return item;
+				});
+
+				await updateDoc(contractorRef, {
+					"sharedGenerators.fromMe": updatedFromMe,
+				});
+
+				if (generatorData?.id && currentUserId) {
+					try {
+						const servicesRef = collection(db, COLLECTIONS.scheduledServices);
+						const q = query(
+							servicesRef,
+							where("generatorId", "==", generatorData.id),
+							where("transporterId", "==", currentUserId),
+							where("status", "==", SERVICE_STATUS.PENDING)
+						);
+						const snap = await getDocs(q);
+
+						const services = snap.docs
+							.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id, ref: docSnap.ref }))
+							.sort((a, b) => {
+								const aDate = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+								const bDate = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+								return aDate - bDate;
+							});
+						const now = new Date();
+
+						let nextUpcoming = null;
+						for (const service of services) {
+							const serviceDate = service.date?.toDate ? service.date.toDate() : new Date(service.date);
+							if (serviceDate >= now) {
+								nextUpcoming = service;
+								break;
+							}
+						}
+
+						let batch = writeBatch(db);
+						let count = 0;
+						for (const service of services) {
+							if (nextUpcoming && service.id === nextUpcoming.id) continue;
+							batch.delete(service.ref);
+							count++;
+							if (count >= 450) {
+								await batch.commit();
+								batch = writeBatch(db);
+								count = 0;
+							}
+						}
+						if (count > 0) {
+							await batch.commit();
+						}
+						const serviceSchedulesRef = collection(db, COLLECTIONS.serviceSchedules);
+						const ssQuery = query(
+							serviceSchedulesRef,
+							where("generatorId", "==", generatorData.id),
+							where("transporterId", "==", currentUserId)
+						);
+						const ssSnap = await getDocs(ssQuery);
+
+						let batch2 = writeBatch(db);
+						let updateCount = 0;
+						ssSnap.forEach((docSnap) => {
+							batch2.update(docSnap.ref, {
+								"serviceFrequency.type": "WC",
+								"serviceFrequency.days": [],
+							});
+							updateCount++;
+							if (updateCount >= 450) {
+								batch2.commit();
+								batch2 = writeBatch(db);
+								updateCount = 0;
+							}
+						});
+						if (updateCount > 0) {
+							await batch2.commit();
+						}
+					} catch (cancelError) {
+						console.error("Failed to delete scheduled services after termination acceptance", cancelError);
+						showErrorToastMessage("Failed to cancel scheduled services during termination acceptance");
+					}
+				}
+
+				setLocalFormState((prev) => ({
+					...prev,
+					status: "TERMINATEACCEPTED",
+					serviceStatus: "TERMINATEACCEPTED",
+				}));
+
+				setIsTerminationAccepted(true);
+				showSuccessToastMessage("Termination request accepted successfully");
+			} catch (error) {
+				console.error("Error accepting termination:", error);
+				showErrorToastMessage("Failed to accept termination request: " + error.message);
+			} finally {
+				setIsAcceptingTermination(false);
+			}
+		};
+
+		const updateLocalState = useCallback(() => {
+			if (!isReadOnly) {
+				setLocalFormState({
+					selectedSubContractor: watchedSelectedSubContractor,
+					serviceFrequency: {
+						type: watchedFrequencyType || "",
+						days: watchedFrequencyDays || [],
+					},
+					requestedStartDate: watchedStartDate,
+					establishedDate: new Date().toLocaleDateString(),
+					serviceType: watchedServiceType || "",
+					serviceDuration: watchedServiceDuration || "15",
+					expectedItemOrService: watchedExpectedItems || [],
+					serviceNote: watchedServiceNote || "",
+				});
+			}
+		}, [
+			isReadOnly,
+			watchedSelectedSubContractor,
+			watchedFrequencyType,
+			watchedFrequencyDays,
+			watchedStartDate,
+			watchedServiceType,
+			watchedServiceDuration,
+			watchedExpectedItems,
+			watchedServiceNote,
+		]);
+
+		useEffect(() => {
+			updateLocalState();
+		}, [updateLocalState]);
+
+		useEffect(() => {
+			if (isReadOnly && ssrData) {
+				console.log("isRecived", ssrData, currentUserId);
+
+				const isReceived = ssrData.subcontractorId === currentUserId;
+				const latestSubcontractor = getLatestSubcontractorById(
+					subContractorData,
+					ssrData.subcontractorId,
+					ssrData.subContractorName
+				);
+
+				setLocalFormState({
+					selectedSubContractor: latestSubcontractor,
+
+					serviceFrequency: {
+						type: ssrData.serviceFrequency || "",
+						days: ssrData.weekdays || [],
+					},
+					requestedStartDate: ssrData.requestedStartDate || null,
+					establishedDate: ssrData.establishedDate || "",
+					serviceType: ssrData.serviceType || "",
+					serviceDuration: ssrData.serviceDuration || "15",
+					expectedItemOrService: ssrData.expectedItemsOrServices || [],
+					serviceNote: ssrData.serviceNote || "",
+					isReceivedSSR: isReceived,
+					serviceStatus: ssrData.status,
+					cancelNote: ssrData.cancelReason,
+					status: ssrData.status,
+					requestedTerminationDate: ssrData.requestedTerminationDate,
+					requester: ssrData?.requester,
+					requesterEmail: ssrData?.requesterEmail,
+					requesterPhone: ssrData?.requesterPhone,
+					terminationNote: ssrData.terminationNote,
+				});
+			}
+		}, [isReadOnly, ssrData, currentUserId, transporterData, subContractorData]);
+
+		const formattedSubcontractorOptions = useMemo(() => {
+			return subContractorData
+				?.filter((subContractor) => subContractor.contractorName || subContractor.name)
+				.map((subContractor) => ({
+					label: `${subContractor.transporterOctoId} , ${subContractor.contractorName || subContractor.name || "--"}`,
+					value: JSON.stringify({
+						id: subContractor.contractorDocid || subContractor.id,
+						Cname: subContractor.contractorName || subContractor.name || "--",
+						Semail: subContractor.generalEmail || "--",
+					}),
+				}));
+		}, [subContractorData]);
+
+		const groupedContainerOptions = useMemo(() => {
+			const containers = (subContractorContainers.length > 0 ? subContractorContainers : itemsOptions).filter((item) =>
+				localFormState.serviceType === SERVICE_TYPES.MEDICAL_WASTE
+					? item.subWasteType !== "Paper Shredding"
+					: item.subWasteType === "Paper Shredding"
+			);
+			return groupContainersBySubWasteType(containers);
+		}, [subContractorContainers, itemsOptions, localFormState.serviceType, SERVICE_TYPES.MEDICAL_WASTE]);
+
+		function getLatestSubcontractorById(subContractorData, id, fallbackName) {
+			if (!id) return null;
+			const found = (subContractorData || []).find((sc) => (sc.contractorDocid || sc.id) === id);
+			return {
+				id,
+				Cname: found?.contractorName || found?.name || fallbackName || "--",
+			};
+		}
+
+		function groupContainersBySubWasteType(containers) {
+			const groupedContainers = {};
+
+			containers.forEach((container) => {
+				const subWasteType = container.subWasteType;
+				if (!groupedContainers[subWasteType]) {
+					groupedContainers[subWasteType] = [];
+				}
+				groupedContainers[subWasteType].push(container);
+			});
+
+			const result = [];
+
+			Object.keys(groupedContainers)
+				.sort()
+				.forEach((subWasteType) => {
+					result.push({
+						label: `${subWasteType}`,
+						value: subWasteType,
+						isDisabled: true,
+						isHeader: true,
+					});
+
+					groupedContainers[subWasteType].forEach((container) => {
+						result.push({
+							label: container.label,
+							value: container.value,
+						});
+					});
+				});
+
+			return result;
+		}
+
+		if (isReadOnly && ssrData && ssrData.subcontractorId === currentUserId) {
+			const ReadOnlySsrView = () => {
+				const getServiceFrequencyLabel = useCallback(
+					(value) => {
+						const option = serviceFrequencyOptions.find((opt) => opt.value === value);
+						return option ? option.label : value;
+					},
+					[serviceFrequencyOptions]
+				);
+
+				const getServiceTypeLabel = useCallback(
+					(value) => {
+						const option = serviceTypes.find((opt) => opt.value === value);
+						return option ? (option.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : option.label) : value;
+					},
+					[serviceTypes]
+				);
+
+				const getServiceDurationLabel = useCallback(
+					(value) => {
+						const option = serviceDurationOptions.find((opt) => opt.value === value);
+						return option ? option.label : value;
+					},
+					[serviceDurationOptions]
+				);
+
+				return (
+					<div className="pb-4">
+						<div
+							className="border-4 p-6 border-[transparent]"
+							style={{ borderImage: "linear-gradient(135deg, #007AFF 0%, #4CD964 100%) 1" }}
+						>
+							<div
+								className={`grid grid-cols-${
+									localFormState.status === "TERMINATED" || localFormState.status === "TERMINATEACCEPTED" ? 3 : 2
+								} gap-6`}
+							>
+								<div className="space-y-4">
+									<div className="flex gap-2">
+										<div className="font-medium">Contractor: </div>
+										<div className="text-md mb-1">{ssrData.transporterName || "N/A"}</div>
+									</div>
+
+									<div className="flex gap-2">
+										<div className="font-medium">Service Frequency: </div>
+										<span className="text-md mb-1">
+											{getServiceFrequencyLabel(localFormState.serviceFrequency.type)}
+										</span>
+									</div>
+
+									{localFormState.serviceFrequency.type === "MTWM" && (
+										<div className="flex gap-2">
+											<div className="font-medium">Selected Weekdays:</div>
+											<div className="text-md mb-1">
+												{localFormState.serviceFrequency.days && localFormState.serviceFrequency.days.length > 0
+													? localFormState.serviceFrequency.days
+															.map((day) => {
+																const dayOption = weekdayOptions.find((opt) => opt.value === day);
+																return dayOption ? dayOption.label : day;
+															})
+															.join(", ")
+													: "No weekdays selected"}
+											</div>
+										</div>
+									)}
+
+									<div className="flex gap-2">
+										<div className="font-medium">Requested Start Date:</div>
+										<div className="text-md mb-1">
+											{localFormState.requestedStartDate
+												? dateFormatter(localFormState.requestedStartDate)
+												: "Not specified"}
+										</div>
+									</div>
+									<div className="flex gap-2">
+										<div className="font-medium">Established Date:</div>
+										<div className="text-md mb-1">
+											{localFormState.establishedDate ? dateFormatter(localFormState.establishedDate) : "Not specified"}
+										</div>
+									</div>
+									<div className="flex gap-2">
+										<div className="font-medium">Shared Service Note:</div>
+										<div className="text-md mb-1 whitespace-pre-wrap">{localFormState.serviceNote || "N/A"}</div>
+									</div>
+								</div>
+
+								<div className="space-y-4">
+									<div className="flex gap-2">
+										<div className="font-medium">Service Type :</div>
+										<div className="text-md mb-1">{getServiceTypeLabel(localFormState.serviceType)}</div>
+									</div>
+									<div className="flex gap-2">
+										<div className="font-medium">Service Duration:</div>
+										<div className="text-md mb-1">{getServiceDurationLabel(localFormState.serviceDuration)}</div>
+									</div>
+
+									<div className="flex gap-2">
+										<div className="font-medium">Expected Containers:</div>
+										{localFormState.expectedItemOrService && localFormState.expectedItemOrService.length > 0 ? (
+											<div>
+												{localFormState.expectedItemOrService.map((itemObj, index) => (
+													<div key={index} className="flex justify-between">
+														<span className="text-md ">({itemObj.quantity || 1})</span>
+														<span className="text-md ml-1">{itemsMap?.[itemObj.item] || itemObj.item}</span>
+													</div>
+												))}
+											</div>
+										) : (
+											<div className="text-gray-500">No containers specified</div>
+										)}
+									</div>
+								</div>
+								{(localFormState.status === "TERMINATED" || localFormState.status === "TERMINATEACCEPTED") && (
+									<div className="space-y-4 border-2 border-red-500 p-3">
+										{console.log("localFormState", localFormState)}
+										<strong>Termination Request Form</strong>
+										<div className="flex gap-2">
+											<div className="font-medium">Requested Termination Date:</div>
+											<div className="text-md mb-1">{localFormState.requestedTerminationDate}</div>
+										</div>
+										<div className="flex gap-2">
+											<div className="font-medium">Requester:</div>
+											<div className="text-md mb-1">{localFormState.requester}</div>
+										</div>
+										<div className="flex gap-2">
+											<div className="font-medium">Requester Email:</div>
+											<div className="text-md mb-1">{localFormState.requesterEmail}</div>
+										</div>
+										<div className="flex gap-2">
+											<div className="font-medium">Requester Phone Number:</div>
+											<div className="text-md mb-1">{localFormState.requesterPhone}</div>
+										</div>
+
+										<div className="flex gap-2">
+											<div className="font-medium">Termination Note:</div>
+											<div className="text-md mb-1">{localFormState.terminationNote}</div>
+										</div>
+										<div className="w-full flex justify-end p-2 gap-4">
+											<button
+												type="button"
+												className={`rounded-full px-4 py-2 text-sm ${
+													localFormState.status === "TERMINATEACCEPTED" || isTerminationAccepted
+														? "bg-gray-200 text-gray-500 cursor-not-allowed"
+														: "border border-gray-500 hover:bg-gray-100 transition"
+												}`}
+												onClick={() => handleAcceptTermination(ssrData.ssrId)}
+												disabled={
+													localFormState.status === "TERMINATEACCEPTED" ||
+													isTerminationAccepted ||
+													isAcceptingTermination
+												}
+											>
+												{isAcceptingTermination
+													? "Processing..."
+													: localFormState.status === "TERMINATEACCEPTED" || isTerminationAccepted
+													? "Termination Accepted"
+													: "Accept Termination"}
+											</button>
+										</div>
+									</div>
+								)}
+							</div>
+						</div>
+					</div>
+				);
+			};
+
+			return <ReadOnlySsrView />;
+		}
+
+		const handleSubcontractorChange = useCallback(
+			(selectedValue) => {
+				if (isReadOnly) return;
+
+				const selectedSubcontractor = JSON.parse(selectedValue);
+
+				setValue("selectedSubContractor", selectedSubcontractor);
+				trigger("selectedSubContractor");
+				setValue("serviceSchedules.expectedItemOrService", []);
+
+				setLocalFormState((prev) => ({
+					...prev,
+					selectedSubContractor: selectedSubcontractor,
+					expectedItemOrService: [],
+				}));
+
+				handleSubcontractorSelected(selectedSubcontractor.id);
+				setValue("serviceSchedules.serviceFrequency.type", "");
+				setLocalFormState((prev) => ({
+					...prev,
+					serviceFrequency: {
+						...prev.serviceFrequency,
+						type: "",
+					},
+				}));
+
+				console.log("Fetching service frequencies for subcontractor:", selectedSubcontractor.id);
+				getServiceFrequencyForSubcontractor(selectedSubcontractor.id);
+			},
+			[isReadOnly, setValue, trigger, handleSubcontractorSelected, getServiceFrequencyForSubcontractor]
+		);
+
+		const handleFrequencyChange = useCallback(
+			(value) => {
+				if (isReadOnly) return;
+
+				setValue("serviceSchedules.serviceFrequency.type", value);
+				trigger("serviceSchedules.serviceFrequency.type");
+
+				setLocalFormState((prev) => ({
+					...prev,
+					serviceFrequency: {
+						...prev.serviceFrequency,
+						type: value,
+					},
+				}));
+			},
+			[isReadOnly, setValue, trigger]
+		);
+
+		const handleWeekdaysChange = useCallback(
+			(selectedDays) => {
+				if (isReadOnly) return;
+
+				setValue("serviceSchedules.serviceFrequency.days", selectedDays);
+				trigger("serviceSchedules.serviceFrequency.days");
+
+				setLocalFormState((prev) => ({
+					...prev,
+					serviceFrequency: {
+						...prev.serviceFrequency,
+						days: selectedDays,
+					},
+				}));
+			},
+			[isReadOnly, setValue, trigger]
+		);
+
+		const handleStartDateChange = useCallback(
+			(value) => {
+				if (isReadOnly) return;
+
+				setValue("requestedStartDate", value);
+				trigger("requestedStartDate");
+
+				setLocalFormState((prev) => ({
+					...prev,
+					requestedStartDate: value,
+				}));
+			},
+			[isReadOnly, setValue, trigger]
+		);
+
+		const handleServiceNoteChange = useCallback(
+			(e) => {
+				if (isReadOnly) return;
+
+				const value = e.target.value;
+				setValue("serviceNote", value);
+
+				setLocalFormState((prev) => ({
+					...prev,
+					serviceNote: value,
+				}));
+			},
+			[isReadOnly, setValue]
+		);
+
+		const handleServiceTypeChange = useCallback(
+			(value) => {
+				if (isReadOnly) return;
+
+				const prevValue = localFormState.serviceType;
+				const shouldKeepContainers =
+					(value === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+					(value === SERVICE_TYPES.PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING) ||
+					(value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.PAPER_SHREDDING) ||
+					(value === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING && prevValue === SERVICE_TYPES.ON_SITE_PAPER_SHREDDING);
+
+				setValue("serviceSchedules.serviceType", value);
+				trigger("serviceSchedules.serviceType");
+
+				let newExpectedItems = shouldKeepContainers ? localFormState.expectedItemOrService : [];
+
+				if (!shouldKeepContainers) {
+					setValue("serviceSchedules.expectedItemOrService", []);
+				}
+
+				setLocalFormState((prev) => ({
+					...prev,
+					serviceType: value,
+					expectedItemOrService: newExpectedItems,
+				}));
+
+				setKeepContainers(shouldKeepContainers);
+			},
+			[isReadOnly, setValue, trigger, localFormState, SERVICE_TYPES, setKeepContainers]
+		);
+
+		const handleServiceDurationChange = useCallback(
+			(value) => {
+				if (isReadOnly) return;
+
+				setValue("serviceSchedules.serviceDuration", value);
+				trigger("serviceSchedules.serviceDuration");
+
+				setLocalFormState((prev) => ({
+					...prev,
+					serviceDuration: value,
+				}));
+			},
+			[isReadOnly, setValue, trigger]
+		);
+
+		const handleContainerSelect = useCallback(
+			(selectedItems) => {
+				if (isReadOnly) return;
+
+				const transformedItems = selectedItems.map((item) => {
+					const existingItem = localFormState.expectedItemOrService.find((v) => v.item === item);
+					return {
+						item,
+						quantity: existingItem?.quantity ?? 1,
+					};
+				});
+
+				setValue("serviceSchedules.expectedItemOrService", transformedItems);
+				trigger("serviceSchedules.expectedItemOrService");
+
+				setLocalFormState((prev) => ({
+					...prev,
+					expectedItemOrService: transformedItems,
+				}));
+			},
+			[isReadOnly, setValue, trigger, localFormState.expectedItemOrService]
+		);
+
+		const handleQuantityChange = useCallback(
+			(itemObj, itemIndex, newQuantity) => {
+				if (isReadOnly && !KeepContainers) return;
+
+				const updatedItems = [...localFormState.expectedItemOrService];
+				updatedItems[itemIndex] = { ...itemObj, quantity: newQuantity };
+
+				setValue("serviceSchedules.expectedItemOrService", updatedItems);
+				trigger("serviceSchedules.expectedItemOrService");
+
+				setLocalFormState((prev) => ({
+					...prev,
+					expectedItemOrService: updatedItems,
+				}));
+			},
+			[isReadOnly, KeepContainers, setValue, trigger, localFormState.expectedItemOrService]
+		);
+
+		useEffect(() => {
+			console.log("Frequency options changed:", subcontractorServiveFrequencyOptions);
+			forceUpdate();
+		}, [subcontractorServiveFrequencyOptions]);
+
+		const [, forceUpdate] = useReducer((x) => x + 1, 0);
+
+		const hasSubcontractorSelected = localFormState.selectedSubContractor != null;
+
+		const selectedSubcontractorValue = useMemo(() => {
+			if (!localFormState.selectedSubContractor) return "";
+			const match = formattedSubcontractorOptions.find(
+				(opt) => JSON.parse(opt.value).id === localFormState.selectedSubContractor.id
+			);
+			return match ? match.value : "";
+		}, [formattedSubcontractorOptions, localFormState.selectedSubContractor]);
+
+		return (
+			<div className="pb-4">
+				<div className="flex gap-8 w-full">
+					<div className="w-1/2 space-y-4">
+						<div className="w-full relative">
+							{console.log("subcontractor", JSON.stringify(localFormState.selectedSubContractor))}
+							<SearchableDropdownForParents
+								label={"Subcontractor"}
+								options={formattedSubcontractorOptions}
+								value={selectedSubcontractorValue}
+								onChange={handleSubcontractorChange}
+								isRequired
+								listHeight="max-h-64"
+								isDisabled={isReadOnly}
+							/>
+							{!isReadOnly && errors.selectedSubContractor && (
+								<p className="text-red-500 text-sm mt-1">{errors.selectedSubContractor.message}</p>
+							)}
+						</div>
+						<Dropdown
+							label="Service Frequency"
+							options={subcontractorServiveFrequencyOptions}
+							value={localFormState.serviceFrequency.type}
+							onChange={handleFrequencyChange}
+							isRequired
+							listHeight="max-h-64"
+							isDisabled={isReadOnly || !hasSubcontractorSelected}
+						/>
+						{!isReadOnly && errors.serviceSchedules?.serviceFrequency?.type && (
+							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceFrequency.type.message}</p>
+						)}
+
+						{localFormState.serviceFrequency.type === "MTWM" && (
+							<div className="w-full mt-2">
+								<div className="w-full flex">
+									<p className="w-1/3 whitespace-nowrap truncate text-cardTextGray">
+										{isReadOnly ? "Selected Weekdays:" : "Select Weekdays *"}
+									</p>
+									<div className="w-2/3">
+										{isReadOnly ? (
+											<div className="bg-gray-100 p-2 rounded-full px-4 text-cardTextGray">
+												{localFormState.serviceFrequency.days && localFormState.serviceFrequency.days.length > 0
+													? localFormState.serviceFrequency.days
+															.map((day) => {
+																const dayOption = weekdayOptions.find((opt) => opt.value === day);
+																return dayOption ? dayOption.label : day;
+															})
+															.join(", ")
+													: "No weekdays selected"}
+											</div>
+										) : (
+											<MultiSelectRounded
+												value={localFormState.serviceFrequency.days}
+												onChange={handleWeekdaysChange}
+												options={weekdayOptions}
+												id={`ssr-weekdays-input`}
+												styles="flex flex-col w-full gap-1"
+												margin="0"
+												isDisabled={isReadOnly || !hasSubcontractorSelected}
+											/>
+										)}
+									</div>
+								</div>
+								{!isReadOnly && errors.serviceSchedules?.serviceFrequency?.days && (
+									<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceFrequency.days.message}</p>
+								)}
+							</div>
+						)}
+
+						<div className="flex items-center justify-between my-4">
+							<label htmlFor="requestedStartDate" className="truncate text-inputLabel font-normal">
+								Requested Start Date {!isReadOnly && "*"}
+							</label>
+							<div className="w-2/3">
+								{isReadOnly ? (
+									<div className="bg-gray-100 p-2 rounded-full px-4 text-cardTextGray">
+										{localFormState.requestedStartDate
+											? dateFormatter(localFormState.requestedStartDate)
+											: "Not specified"}
+									</div>
+								) : (
+									<CustomDatePicker
+										selectedDate={localFormState.requestedStartDate}
+										setSelectedDate={handleStartDateChange}
+										label={"Requested Start Date *"}
+										startYear={new Date().getFullYear()}
+										endYear={new Date().getFullYear() + 5}
+										yearReversed={true}
+										minDate={new Date()}
+										isDisabled={isReadOnly || !hasSubcontractorSelected}
+									/>
+								)}
+							</div>
+						</div>
+						{!isReadOnly && errors.requestedStartDate && (
+							<p className="text-red-500 text-sm mt-1">{errors.requestedStartDate.message}</p>
+						)}
+
+						{isReadOnly && (
+							<div className="flex items-center justify-between my-4">
+								<label htmlFor="requestedStartDate" className="truncate text-inputLabel font-normal">
+									Established Date {!isReadOnly && "*"}
+								</label>
+								<div className="w-2/3">
+									<div className="bg-gray-100 p-2 rounded-full px-4 text-cardTextGray">
+										{localFormState.establishedDate ? dateFormatter(localFormState.establishedDate) : "Not specified"}
+									</div>
+								</div>
+							</div>
+						)}
+
+						<div className="w-full">
+							<Textarea
+								ref={serviceNoteRef}
+								value={localFormState.serviceNote || ""}
+								onChange={handleServiceNoteChange}
+								label="Shared Service Note"
+								isDisabled={isReadOnly}
+							/>
+						</div>
+
+						{isReadOnly && localFormState.serviceStatus && (
+							<div className="w-full ">
+								<div className="flex gap-32 items-center justify-between my-4">
+									<div className="text-cardTextGray text-nowrap">Service Status :</div>
+									<div
+										className={
+											localFormState.serviceStatus == SERVICE_STATUS.DECLINED
+												? "text-red-500 text-md mb-1 text-nowrap bg-gray-100 p-2 rounded-full px-4 w-full"
+												: "text-cardTextGray text-md mb-1 text-nowrap bg-gray-100 p-2 rounded-full px-4 w-full"
+										}
+									>
+										{localFormState.serviceStatus == SERVICE_STATUS.DECLINED
+											? "This request was declined"
+											: capitalizeFirstLetter(
+													localFormState.serviceStatus == "TERMINATED"
+														? "Termination Requested"
+														: localFormState.serviceStatus === "TERMINATEACCEPTED"
+														? "Termination Accepted"
+														: localFormState.serviceStatus
+											  )}
+									</div>
+								</div>
+								{localFormState.serviceStatus === SERVICE_STATUS.DECLINED && localFormState.cancelNote && (
+									<Textarea
+										value={capitalizeFirstLetter(localFormState.cancelNote)}
+										onChange={() => {}}
+										label="Decline Reason:"
+										isDisabled={true}
+									/>
+								)}
+							</div>
+						)}
+					</div>
+
+					<div className="w-1/2 space-y-4">
+						<Dropdown
+							label="Service Type"
+							options={serviceTypes.map((item) => ({
+								label: item.value === "HAZARDOUS_WASTE" ? "Hazardous Waste" : item.label,
+								value: item.value === "HAZARDOUS_WASTE" ? null : item.value,
+								isDisabled: item.value === "HAZARDOUS_WASTE",
+							}))}
+							disabledBgColor="white"
+							disabledTextColor="gray-300"
+							value={localFormState.serviceType}
+							onChange={handleServiceTypeChange}
+							isRequired
+							isDisabled={isReadOnly || !hasSubcontractorSelected}
+						/>
+						{!isReadOnly && errors.serviceSchedules?.serviceType && (
+							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceType.message}</p>
+						)}
+
+						<Dropdown
+							label="Service Duration"
+							options={serviceDurationOptions}
+							value={localFormState.serviceDuration}
+							onChange={handleServiceDurationChange}
+							isRequired
+							isDisabled={isReadOnly || !hasSubcontractorSelected}
+						/>
+						{!isReadOnly && errors.serviceSchedules?.serviceDuration && (
+							<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.serviceDuration.message}</p>
+						)}
+
+						<div className="w-full flex flex-col gap-4">
+							<div className="w-full flex">
+								<p className="w-1/3 whitespace-nowrap truncate text-inputLabel font-normal">Expected Container(s) *</p>
+								<div className="w-2/3">
+									<MultiSelectRounded
+										isDisabled={isReadOnly || (!isReadOnly && !localFormState.serviceType) || !hasSubcontractorSelected}
+										value={localFormState.expectedItemOrService.map((v) => v.item)}
+										onChange={handleContainerSelect}
+										options={groupedContainerOptions}
+										isRequired={true}
+										id="expected-items-services-ssr"
+										styles="flex flex-col w-full gap-1 min-h-9"
+										margin="0"
+									/>
+								</div>
+							</div>
+
+							{!isReadOnly && errors.serviceSchedules?.expectedItemOrService && (
+								<p className="text-red-500 text-sm mt-1">{errors.serviceSchedules.expectedItemOrService.message}</p>
+							)}
+
+							{localFormState.expectedItemOrService?.length > 0 && (
+								<div className="mb-4 flex flex-col gap-4">
+									{localFormState.expectedItemOrService.map((itemObj, itemIndex) => (
+										<div key={itemObj.item} className="flex items-center">
+											<span className="text-base w-1/3 text-inputLabel truncate whitespace-nowrap max-h-9 overflow-hidden">
+												{itemsMap?.[itemObj.item]?.length > 40 ? itemsMap?.[itemObj.item] : itemsMap?.[itemObj.item]}
+											</span>
+											<div className="relative w-2/3">
+												<input
+													min="1"
+													max="999"
+													value={itemObj.quantity || 1}
+													onChange={(e) => {
+														const newQuantity = Math.min(Math.max(1, Number(e.target.value)), 999);
+														handleQuantityChange(itemObj, itemIndex, newQuantity);
+													}}
+													disabled={isReadOnly || !hasSubcontractorSelected}
+													className="p-2 pr-8 w-full pl-3 text-left text-sm bg-inputBg rounded-full outline-none focus:ring-1 focus:ring-dashInActiveBtnText appearance-none"
+												/>
+
+												{!isReadOnly && hasSubcontractorSelected && (
+													<>
+														{/* Increase Button (Up Arrow) */}
+														<button
+															type="button"
+															onClick={() => {
+																const newQuantity = Math.min((itemObj.quantity || 1) + 1, 999);
+																handleQuantityChange(itemObj, itemIndex, newQuantity);
+															}}
+															className="absolute right-2 top-1 text-gray-500 hover:text-gray-700"
+														>
+															<HiOutlineChevronUp className="w-4 h-4" />
+														</button>
+
+														{/* Decrease Button (Down Arrow) */}
+														<button
+															type="button"
+															onClick={() => {
+																const newQuantity = Math.max((itemObj.quantity || 1) - 1, 1);
+																handleQuantityChange(itemObj, itemIndex, newQuantity);
+															}}
+															className="absolute right-2 bottom-1 text-gray-500 hover:text-gray-700"
+														>
+															<HiOutlineChevronDown className="w-4 h-4" />
+														</button>
+													</>
+												)}
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+						</div>
+					</div>
+				</div>
+			</div>
+		);
+	}
+);
+
+export default SsrFormComponent;
+SsrFormComponent.displayName = "SsrFormComponent";
