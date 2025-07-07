@@ -1440,7 +1440,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 			await fetchSentSubcontractorRequests();
 			setShowSSRForm(false);
 		}
-	}, [user?.uid, generatorData?.id]);
+	}, [user?.uid, generatorData?.id,fetchSentSubcontractorRequests]);
 
 	const getEstablishedDate = (index) => {
 		() => {
@@ -1974,6 +1974,8 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 															itemsOptions.filter((item) =>
 																formValues.serviceSchedules[index].serviceType === SERVICE_TYPES.MEDICAL_WASTE
 																	? item.subWasteType !== "Paper Shredding"
+																	: formValues.serviceSchedules[index].serviceType === SERVICE_TYPES.PRODUCT_DESTRUCTION
+																	? item.subWasteType === "Product Destruction"
 																	: item.subWasteType === "Paper Shredding"
 															)
 														)}
