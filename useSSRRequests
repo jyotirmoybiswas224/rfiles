@@ -736,11 +736,15 @@ export const useSSRManagement = (userId, generatorId) => {
 	const subcontractors = useSubcontractors(userId);
 	const ssrRequests = useSsrRequests(userId, generatorId);
 
+	// Determine if all critical data has been loaded
+	const isDataLoaded = !containers.isLoading && !subcontractors.isLoading && !ssrRequests.isLoading;
+	
 	return {
 		...containers,
 		...subcontractors,
 		...ssrRequests,
 		isLoading: containers.isLoading || subcontractors.isLoading || ssrRequests.isLoading,
+		isDataLoaded,
 	};
 };
 
