@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apply Credit Functionality Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .demo-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .demo-header {
+            border-bottom: 2px solid #e5e5e5;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .demo-section {
+            margin-bottom: 30px;
+        }
+        
+        .code-block {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+        }
+        
+        .feature-list {
+            list-style-type: none;
+            padding: 0;
+        }
+        
+        .feature-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .feature-list li:before {
+            content: "✓ ";
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .component-demo {
+            border: 2px dashed #007bff;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            background: #f8f9ff;
+        }
+        
+        .mock-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        .mock-table th,
+        .mock-table td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        
+        .mock-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        
+        .mock-button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .mock-button:hover {
+            background: #0056b3;
+        }
+        
+        .mock-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-available {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-partial {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .modal-demo {
+            border: 2px solid #28a745;
+            background: #f8fff8;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <div class="demo-header">
+            <h1>Apply Credit Functionality - Implementation Demo</h1>
+            <p>This demo shows the implementation of the Apply Credit functionality for generator billing settings.</p>
+        </div>
+        
+        <div class="demo-section">
+            <h2>📋 Implementation Overview</h2>
+            <p>The Apply Credit functionality has been implemented with the following components:</p>
+            <ul class="feature-list">
+                <li><strong>GeneratorTransaction.js</strong> - Main component with handleTransactionAction function</li>
+                <li><strong>ApplyCreditModal.js</strong> - Modal component for applying credit memos to invoices</li>
+                <li>Credit allocation validation to prevent over-application</li>
+                <li>Real-time remaining credit amount calculation</li>
+                <li>Batch database updates for credit applications</li>
+                <li>Status updates for both credit memos and invoices</li>
+            </ul>
+        </div>
+        
+        <div class="demo-section">
+            <h2>🎯 Key Features Implemented</h2>
+            
+            <div class="component-demo">
+                <h3>GeneratorTransaction Component</h3>
+                <p>Main component that displays transactions and handles the "Apply Credit" action.</p>
+                
+                <table class="mock-table">
+                    <thead>
+                        <tr>
+                            <th>Transaction #</th>
+                            <th>Type</th>
+                            <th>Date</th>
+                            <th>Amount</th>
+                            <th>Remaining</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>CM-001</td>
+                            <td><span class="status-badge status-available">Credit Memo</span></td>
+                            <td>2024-01-15</td>
+                            <td>$500.00</td>
+                            <td>$500.00</td>
+                            <td><span class="status-badge status-available">Available</span></td>
+                            <td><button class="mock-button">Apply Credit</button></td>
+                        </tr>
+                        <tr>
+                            <td>CM-002</td>
+                            <td><span class="status-badge status-available">Credit Memo</span></td>
+                            <td>2024-01-10</td>
+                            <td>$750.00</td>
+                            <td>$250.00</td>
+                            <td><span class="status-badge status-partial">Partially Applied</span></td>
+                            <td><button class="mock-button">Apply Credit</button></td>
+                        </tr>
+                        <tr>
+                            <td>CM-003</td>
+                            <td><span class="status-badge status-available">Credit Memo</span></td>
+                            <td>2024-01-05</td>
+                            <td>$300.00</td>
+                            <td>$0.00</td>
+                            <td><span class="status-badge" style="background: #d1ecf1; color: #0c5460;">Fully Applied</span></td>
+                            <td><button class="mock-button" disabled>Apply Credit</button></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="modal-demo">
+                <h3>ApplyCreditModal Component</h3>
+                <p>Modal that opens when "Apply Credit" is clicked, allowing users to allocate credit to invoices.</p>
+                
+                <h4>Features:</h4>
+                <ul class="feature-list">
+                    <li>Shows credit memo details (number, date, original amount, available credit)</li>
+                    <li>Lists outstanding invoices with remaining balances</li>
+                    <li>Real-time calculation of remaining credit as user allocates</li>
+                    <li>Validation to prevent over-allocation (more than invoice amount or available credit)</li>
+                    <li>"Apply Max" buttons for quick allocation to individual invoices</li>
+                    <li>"Apply Remaining" button to distribute remaining credit</li>
+                    <li>Form validation with clear error messages</li>
+                </ul>
+                
+                <div style="background: white; padding: 15px; border: 1px solid #ddd; border-radius: 4px; margin: 15px 0;">
+                    <h5>Example Modal Layout:</h5>
+                    <div style="background: #e8f5e9; padding: 10px; border-radius: 4px; margin: 10px 0;">
+                        <strong>Credit Memo Details:</strong> CM-001 | Date: 2024-01-15 | Available: $500.00
+                    </div>
+                    <div style="background: #e3f2fd; padding: 10px; border-radius: 4px; margin: 10px 0;">
+                        <strong>Allocation Summary:</strong> Total Allocated: $300.00 | Remaining: $200.00
+                    </div>
+                    <table class="mock-table" style="font-size: 12px;">
+                        <thead>
+                            <tr>
+                                <th>Invoice #</th>
+                                <th>Amount</th>
+                                <th>Remaining</th>
+                                <th>Credit to Apply</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>INV-101</td>
+                                <td>$200.00</td>
+                                <td>$200.00</td>
+                                <td><input type="number" value="200.00" style="width: 80px; padding: 2px;"></td>
+                                <td><button class="mock-button" style="font-size: 10px;">Apply Max</button></td>
+                            </tr>
+                            <tr>
+                                <td>INV-102</td>
+                                <td>$150.00</td>
+                                <td>$150.00</td>
+                                <td><input type="number" value="100.00" style="width: 80px; padding: 2px;"></td>
+                                <td><button class="mock-button" style="font-size: 10px;">Apply Max</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <div class="demo-section">
+            <h2>🔧 Technical Implementation</h2>
+            
+            <h3>handleTransactionAction Function</h3>
+            <div class="code-block">
+const handleTransactionAction = (action, transaction) => {
+    switch (action) {
+        case "apply-credit":
+            // Validation checks
+            if (!transaction || transaction.type !== "credit-memo") {
+                toast.error("Please select a valid credit memo to apply");
+                return;
+            }
+            
+            if (transaction.remainingAmount <= 0) {
+                toast.error("This credit memo has no remaining balance");
+                return;
+            }
+
+            if (invoices.length === 0) {
+                toast.error("No outstanding invoices available");
+                return;
+            }
+
+            // Open modal with selected credit memo
+            setSelectedTransaction(transaction);
+            setIsApplyCreditModalOpen(true);
+            break;
+        // ... other cases
+    }
+};
+            </div>
+            
+            <h3>Credit Application Logic</h3>
+            <div class="code-block">
+const handleApplyCredit = async (creditMemo, allocations) => {
+    try {
+        const batch = writeBatch(db);
+        let totalAllocated = 0;
+
+        // Validate and prepare updates
+        for (const allocation of allocations) {
+            if (allocation.amount <= 0) continue;
+            totalAllocated += allocation.amount;
+            
+            // Validation checks...
+            
+            // Update invoice
+            const invoiceRef = doc(db, COLLECTIONS.invoices, invoice.id);
+            batch.update(invoiceRef, {
+                remainingAmount: newRemainingAmount,
+                status: newStatus,
+                appliedCredits: [...appliedCredits, newCreditApplication]
+            });
+        }
+
+        // Update credit memo
+        const creditMemoRef = doc(db, COLLECTIONS.creditMemos, creditMemo.id);
+        batch.update(creditMemoRef, {
+            remainingAmount: newCreditRemainingAmount,
+            status: newCreditStatus,
+            appliedAllocations: [...existingAllocations, ...newAllocations]
+        });
+
+        // Commit all changes atomically
+        await batch.commit();
+        
+    } catch (error) {
+        // Error handling...
+    }
+};
+            </div>
+        </div>
+        
+        <div class="demo-section">
+            <h2>✅ Validation Rules Implemented</h2>
+            <ul class="feature-list">
+                <li><strong>Credit Memo Validation:</strong> Must be a valid credit memo with remaining balance</li>
+                <li><strong>Invoice Validation:</strong> Cannot apply more credit than invoice remaining amount</li>
+                <li><strong>Credit Limit:</strong> Total allocation cannot exceed available credit amount</li>
+                <li><strong>Minimum Allocation:</strong> Must allocate credit to at least one invoice</li>
+                <li><strong>Real-time Feedback:</strong> Immediate validation with error messages</li>
+                <li><strong>Status Updates:</strong> Automatic status changes for credit memos and invoices</li>
+            </ul>
+        </div>
+        
+        <div class="demo-section">
+            <h2>🎨 UI/UX Features</h2>
+            <ul class="feature-list">
+                <li><strong>Responsive Design:</strong> Modal works on desktop and mobile devices</li>
+                <li><strong>Loading States:</strong> Proper loading indicators during operations</li>
+                <li><strong>Error Handling:</strong> Clear error messages with specific guidance</li>
+                <li><strong>Visual Feedback:</strong> Color-coded status badges and amounts</li>
+                <li><strong>Quick Actions:</strong> "Apply Max" and "Apply Remaining" shortcuts</li>
+                <li><strong>Real-time Updates:</strong> Immediate calculation of remaining amounts</li>
+            </ul>
+        </div>
+        
+        <div class="demo-section">
+            <h2>🚀 Next Steps</h2>
+            <p>The implementation is complete and ready for integration. To use these components:</p>
+            <ol>
+                <li>Import the GeneratorTransaction component in your billing page</li>
+                <li>Ensure Firebase collections (transactions, creditMemos, invoices) exist</li>
+                <li>Pass the required props (generatorData, user) to the component</li>
+                <li>The ApplyCreditModal is automatically included and will open when needed</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>
