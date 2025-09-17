@@ -90,6 +90,7 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 	const [todayStartedRoute, setTodayStartedRoute] = useState();
 	const [transporterName, setTransporterName] = useState("");
 	const [delay, setDelay] = useState(0);
+	const [invoice, setInvoice] = useState([]);
 
 	const subscriptionsRef = useRef([]);
 	const generatorCompletionStatusRef = useRef({});
@@ -953,6 +954,66 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 			fetchTransporter(generatorData?.subContractors?.[0]?.id);
 		}
 	}, [user, generatorData]);
+
+	// Fetch invoice data for billing summary
+	useEffect(() => {
+		if (!generatorData?.id) return;
+
+		const fetchInvoiceData = async () => {
+			try {
+				const invoiceQuery = query(
+					collection(db, COLLECTIONS.invoices),
+					where("generatorId", "==", generatorData.id),
+					orderBy("dueDate", "desc"),
+					limit(5)
+				);
+				
+				const unsubscribe = onSnapshot(invoiceQuery, (snapshot) => {
+					const invoiceData = snapshot.docs.map(doc => ({
+						id: doc.id,
+						...doc.data()
+					}));
+					setInvoice(invoiceData);
+				});
+
+				return unsubscribe;
+			} catch (error) {
+				console.error("Error fetching invoice data:", error);
+				setInvoice([]);
+			}
+		};
+
+		fetchInvoiceData();
+	}, [generatorData?.id]);
+
+	// Helper function to format Firestore Timestamp for display
+	const formatTimestampForDisplay = (timestamp) => {
+		if (!timestamp) return "--";
+		
+		try {
+			// Handle Firestore Timestamp object
+			if (timestamp && typeof timestamp === "object" && timestamp.seconds !== undefined) {
+				return formatDateString(new Date(timestamp.seconds * 1000).toISOString(), generatorData?.workingHours?.timeZone);
+			}
+			// Handle Date objects
+			if (timestamp instanceof Date) {
+				return formatDateString(timestamp.toISOString(), generatorData?.workingHours?.timeZone);
+			}
+			// Handle timestamp with toDate method
+			if (timestamp && typeof timestamp.toDate === "function") {
+				return formatDateString(timestamp.toDate().toISOString(), generatorData?.workingHours?.timeZone);
+			}
+			// Handle string timestamps
+			if (typeof timestamp === "string") {
+				return formatDateString(timestamp, generatorData?.workingHours?.timeZone);
+			}
+			
+			return "--";
+		} catch (error) {
+			console.error("Error formatting timestamp:", error);
+			return "--";
+		}
+	};
 	return (
 		<div className="bg-bgDefaultColor px-32 py-5 flex flex-col gap-5">
 			<div className="grid grid-cols-3 gap-5 items-center  ">
@@ -1155,7 +1216,12 @@ const GeneratorDashboardAdmin = ({ setGeneratorData, generatorData }) => {
 							</div>
 							<div className="grid grid-cols-2">
 								<span className="text-left">Last Payment:</span>
-								<span className="text-left">{dummyBillingData?.lastPayment}</span>
+								<span className="text-left">
+									{invoice && invoice.length > 0 && invoice[0]?.dueDate 
+										? formatTimestampForDisplay(invoice[0].dueDate)
+										: "--"
+									}
+								</span>
 							</div>
 							<div className="grid grid-cols-2">
 								<span className="text-left">Overdue Balance:</span>
