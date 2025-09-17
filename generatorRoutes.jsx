@@ -322,7 +322,7 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 	}, [generatorData]);
 
 	useEffect(() => {
-		if (!user) return;
+		if (!user?.uid) return;
 		let unsubscribe = onSnapshot(doc(db, COLLECTIONS.serviceSettings, user.uid), (doc) => {
 			if (doc.exists()) {
 				const data = doc.data();
@@ -468,13 +468,20 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 	}, [isGeneratorProfileComplete]);
 
 	const fetchServiceSchedules = async () => {
-		const snap = await getDocs(
-			query(
-				collection(db, COLLECTIONS.serviceSchedules),
-				where("generatorId", "==", generatorData.id),
-				where("transporterId", "==", user?.uid)
-			)
-		);
+		// Add null checks before constructing Firestore query
+		if (!generatorData?.id || !user?.uid) {
+			console.warn("Cannot fetch service schedules: missing generatorData.id or user.uid");
+			return;
+		}
+
+		try {
+			const snap = await getDocs(
+				query(
+					collection(db, COLLECTIONS.serviceSchedules),
+					where("generatorId", "==", generatorData.id),
+					where("transporterId", "==", user?.uid)
+				)
+			);
 		const tempSchedules = snap.docs
 			.filter((el) => el.exists())
 			.map((el) => {
@@ -529,14 +536,17 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 		});
 		setValue("serviceSchedules", tempSchedules);
 		setPrevServiceSchedules(tempSchedules);
+		} catch (error) {
+			console.error("Error fetching service schedules:", error);
+		}
 	};
 	useEffect(() => {
-		if (!generatorData) return;
+		if (!generatorData?.id || !user?.uid) return;
 		fetchServiceSchedules();
-	}, [generatorData]);
+	}, [generatorData, user]);
 
 	useEffect(() => {
-		if (!generatorData) return;
+		if (!generatorData?.id) return;
 
 		let unsubscribe = onSnapshot(
 			query(
@@ -909,6 +919,13 @@ const GeneratorRoutes = ({ onClickBack, genId, setGeneratorData, generatorData }
 	const deleteSchedule = async (field, index) => {
 		console.log({ field });
 		showLoadingToastMessage("Deleting");
+		
+		// Add null checks before proceeding with Firestore operations
+		if (!generatorData?.id) {
+			showErrorToastMessage("Cannot delete schedule: missing generator data");
+			return;
+		}
+		
 		let allSchedules = getValues("serviceSchedules");
 
 		let dataToDelete = allSchedules.find((_, i) => index == i);
