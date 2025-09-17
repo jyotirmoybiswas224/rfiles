@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generator Transaction Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .demo-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #e1e1e1;
+            border-radius: 5px;
+        }
+        .button {
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            margin-right: 10px;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .button:hover {
+            background-color: #2563eb;
+        }
+        .button.secondary {
+            background-color: #6b7280;
+        }
+        .button.secondary:hover {
+            background-color: #4b5563;
+        }
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .modal {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            width: 400px;
+            max-width: 90vw;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .close-button {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #374151;
+        }
+        .form-group select,
+        .form-group input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .form-group select:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .credit-info {
+            background-color: #f0f9ff;
+            border: 1px solid #0ea5e9;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Generator Transaction Demo</h1>
+        <p>This demo shows the simplified "Apply Credit" functionality that reuses the existing Receive Payment modal.</p>
+        
+        <div class="demo-section">
+            <h3>Generator Information</h3>
+            <p><strong>Generator ID:</strong> GEN-123</p>
+            <p><strong>Available Credits:</strong> 2 credit memos</p>
+            <ul>
+                <li>Credit Memo CM-2024-001: $150.50</li>
+                <li>Credit Memo CM-2024-002: $75.25</li>
+            </ul>
+        </div>
+
+        <div class="demo-section">
+            <h3>Transaction Actions</h3>
+            <p>Both buttons open the same modal, but "Apply Credit" pre-selects credit memo as the payment method:</p>
+            
+            <button class="button" onclick="openReceivePaymentModal()">
+                Receive Payment
+            </button>
+            
+            <button class="button secondary" onclick="openApplyCreditModal()">
+                Apply Credit
+            </button>
+        </div>
+
+        <div class="demo-section">
+            <h3>Implementation Details</h3>
+            <p>The <code>handleTransactionAction</code> function handles both actions:</p>
+            <ul>
+                <li><strong>receive-payment:</strong> Opens modal with default payment options</li>
+                <li><strong>apply-credit:</strong> Opens same modal with credit memo pre-selected</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Receive Payment Modal -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modal-title">Receive Payment</h2>
+                <button class="close-button" onclick="closeModal()">&times;</button>
+            </div>
+            
+            <form id="transaction-form" onsubmit="handleSubmit(event)">
+                <div class="form-group">
+                    <label for="payment-method">Payment Method</label>
+                    <select id="payment-method" onchange="handlePaymentMethodChange()">
+                        <option value="cash">Cash</option>
+                        <option value="check">Check</option>
+                        <option value="credit-card">Credit Card</option>
+                        <option value="credit-memo">Credit Memo</option>
+                    </select>
+                </div>
+
+                <div id="credit-selection" class="form-group hidden">
+                    <label for="credit-memo">Available Credits</label>
+                    <select id="credit-memo" onchange="handleCreditSelection()">
+                        <option value="">Select a credit memo</option>
+                        <option value="credit-001" data-amount="150.50">Credit CM-2024-001 - $150.50</option>
+                        <option value="credit-002" data-amount="75.25">Credit CM-2024-002 - $75.25</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="amount">Amount</label>
+                    <input type="number" id="amount" step="0.01" min="0" placeholder="0.00" required>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="button" style="background-color: #6b7280;" onclick="closeModal()">
+                        Cancel
+                    </button>
+                    <button type="submit" class="button" id="submit-button">
+                        Receive Payment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let currentTransactionType = 'receive-payment';
+
+        // Mock generator data
+        const generatorData = {
+            id: 'GEN-123',
+            availableCredits: [
+                { id: 'credit-001', number: 'CM-2024-001', amount: 150.50 },
+                { id: 'credit-002', number: 'CM-2024-002', amount: 75.25 }
+            ]
+        };
+
+        /**
+         * Handle transaction actions - this is the main function from GeneratorTransaction.js
+         */
+        function handleTransactionAction(action, data = null) {
+            console.log(`Handling transaction action: ${action}`, data);
+            currentTransactionType = action;
+            
+            const modal = document.getElementById('modal-overlay');
+            const title = document.getElementById('modal-title');
+            const submitButton = document.getElementById('submit-button');
+            const paymentMethodSelect = document.getElementById('payment-method');
+            
+            switch (action) {
+                case 'receive-payment':
+                    title.textContent = 'Receive Payment';
+                    submitButton.textContent = 'Receive Payment';
+                    paymentMethodSelect.value = 'cash';
+                    paymentMethodSelect.disabled = false;
+                    document.getElementById('amount').value = '';
+                    break;
+                
+                case 'apply-credit':
+                    title.textContent = 'Apply Credit';
+                    submitButton.textContent = 'Apply Credit';
+                    paymentMethodSelect.value = 'credit-memo';
+                    paymentMethodSelect.disabled = true;
+                    
+                    // Pre-select first available credit
+                    if (data && data.creditMemo) {
+                        document.getElementById('credit-memo').value = data.creditMemo.id;
+                        document.getElementById('amount').value = data.creditMemo.amount;
+                    }
+                    break;
+            }
+            
+            handlePaymentMethodChange();
+            modal.classList.remove('hidden');
+        }
+
+        function openReceivePaymentModal() {
+            handleTransactionAction('receive-payment');
+        }
+
+        function openApplyCreditModal() {
+            // Pre-select the first available credit memo
+            const firstCredit = generatorData.availableCredits[0];
+            handleTransactionAction('apply-credit', { creditMemo: firstCredit });
+        }
+
+        function closeModal() {
+            document.getElementById('modal-overlay').classList.add('hidden');
+            document.getElementById('transaction-form').reset();
+        }
+
+        function handlePaymentMethodChange() {
+            const paymentMethod = document.getElementById('payment-method').value;
+            const creditSelection = document.getElementById('credit-selection');
+            
+            if (paymentMethod === 'credit-memo') {
+                creditSelection.classList.remove('hidden');
+            } else {
+                creditSelection.classList.add('hidden');
+            }
+        }
+
+        function handleCreditSelection() {
+            const creditSelect = document.getElementById('credit-memo');
+            const amountInput = document.getElementById('amount');
+            const selectedOption = creditSelect.options[creditSelect.selectedIndex];
+            
+            if (selectedOption.dataset.amount) {
+                amountInput.value = selectedOption.dataset.amount;
+            }
+        }
+
+        function handleSubmit(event) {
+            event.preventDefault();
+            
+            const formData = new FormData(event.target);
+            const transactionData = {
+                type: currentTransactionType,
+                paymentMethod: document.getElementById('payment-method').value,
+                amount: parseFloat(document.getElementById('amount').value),
+                timestamp: new Date().toISOString()
+            };
+
+            if (transactionData.paymentMethod === 'credit-memo') {
+                const creditId = document.getElementById('credit-memo').value;
+                const credit = generatorData.availableCredits.find(c => c.id === creditId);
+                transactionData.creditMemo = credit;
+            }
+
+            console.log('Transaction completed:', transactionData);
+            alert(`Transaction completed successfully!\nType: ${transactionData.type}\nAmount: $${transactionData.amount}`);
+            
+            closeModal();
+        }
+
+        // Close modal when clicking outside
+        document.getElementById('modal-overlay').addEventListener('click', function(event) {
+            if (event.target === this) {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+</html>
